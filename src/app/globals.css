@@ -41,10 +41,11 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 10px);
 }
 
 :root {
-  --radius: 0.75rem;
+  --radius: 0.875rem;
   --background: oklch(0.99 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -78,38 +79,39 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
+/* Refined warm-neutral dark theme — deep charcoal, not pure black */
 .dark {
-  --background: oklch(0.16 0.006 280);
-  --foreground: oklch(0.97 0.005 280);
-  --card: oklch(0.21 0.008 280);
-  --card-foreground: oklch(0.97 0.005 280);
-  --popover: oklch(0.2 0.008 280);
-  --popover-foreground: oklch(0.97 0.005 280);
-  --primary: oklch(0.95 0 0);
-  --primary-foreground: oklch(0.18 0.008 280);
-  --secondary: oklch(0.26 0.008 280);
-  --secondary-foreground: oklch(0.97 0.005 280);
-  --muted: oklch(0.26 0.008 280);
-  --muted-foreground: oklch(0.68 0.01 280);
-  --accent: oklch(0.28 0.01 280);
-  --accent-foreground: oklch(0.97 0.005 280);
-  --destructive: oklch(0.68 0.2 22);
-  --border: oklch(1 0 0 / 9%);
-  --input: oklch(1 0 0 / 13%);
-  --ring: oklch(0.72 0.16 60);
+  --background: oklch(0.155 0.004 285);
+  --foreground: oklch(0.965 0.004 285);
+  --card: oklch(0.205 0.006 285);
+  --card-foreground: oklch(0.965 0.004 285);
+  --popover: oklch(0.195 0.006 285);
+  --popover-foreground: oklch(0.965 0.004 285);
+  --primary: oklch(0.955 0 0);
+  --primary-foreground: oklch(0.18 0.006 285);
+  --secondary: oklch(0.255 0.006 285);
+  --secondary-foreground: oklch(0.965 0.004 285);
+  --muted: oklch(0.248 0.006 285);
+  --muted-foreground: oklch(0.66 0.012 285);
+  --accent: oklch(0.275 0.008 285);
+  --accent-foreground: oklch(0.965 0.004 285);
+  --destructive: oklch(0.668 0.198 22);
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 11%);
+  --ring: oklch(0.78 0.15 65);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.2 0.008 280);
-  --sidebar-foreground: oklch(0.97 0.005 280);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.26 0.008 280);
-  --sidebar-accent-foreground: oklch(0.97 0.005 280);
-  --sidebar-border: oklch(1 0 0 / 9%);
-  --sidebar-ring: oklch(0.72 0.16 60);
+  --sidebar: oklch(0.198 0.006 285);
+  --sidebar-foreground: oklch(0.965 0.004 285);
+  --sidebar-primary: oklch(0.78 0.15 65);
+  --sidebar-primary-foreground: oklch(0.18 0.006 285);
+  --sidebar-accent: oklch(0.255 0.006 285);
+  --sidebar-accent-foreground: oklch(0.965 0.004 285);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.78 0.15 65);
 }
 
 @layer base {
@@ -119,81 +121,113 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "ss01", "cv01", "cv03";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
 }
 
-/* ---------- App-level ambient background ---------- */
+/* ============================================================
+   RankForge design system
+   ============================================================ */
+
+/* Ambient app background — layered radial glows over warm charcoal */
 .rf-app-bg {
   background-color: var(--background);
   background-image:
-    radial-gradient(60rem 60rem at 85% -10%, color-mix(in oklch, oklch(0.72 0.19 60) 16%, transparent), transparent 60%),
-    radial-gradient(50rem 50rem at -10% 10%, color-mix(in oklch, oklch(0.65 0.2 20) 12%, transparent), transparent 55%),
-    radial-gradient(40rem 40rem at 50% 120%, color-mix(in oklch, oklch(0.7 0.15 300) 8%, transparent), transparent 60%);
+    radial-gradient(48rem 48rem at 88% -8%, color-mix(in oklch, oklch(0.74 0.16 55) 13%, transparent), transparent 62%),
+    radial-gradient(42rem 42rem at -8% 8%, color-mix(in oklch, oklch(0.62 0.18 18) 9%, transparent), transparent 58%),
+    radial-gradient(36rem 36rem at 50% 118%, color-mix(in oklch, oklch(0.66 0.14 300) 6%, transparent), transparent 60%);
   background-attachment: fixed;
 }
 
-/* ---------- Glass panels ---------- */
-.glass {
-  background: color-mix(in oklch, var(--card) 72%, transparent);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  border: 1px solid color-mix(in oklch, white 8%, transparent);
+/* Glass panels — soft, elevated, translucent */
+.rf-panel {
+  background: color-mix(in oklch, var(--card) 78%, transparent);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  border: 1px solid color-mix(in oklch, white 7%, transparent);
   box-shadow:
-    0 1px 0 0 color-mix(in oklch, white 6%, transparent) inset,
-    0 10px 30px -12px rgb(0 0 0 / 0.6);
+    0 1px 0 0 color-mix(in oklch, white 5%, transparent) inset,
+    0 1px 2px 0 rgb(0 0 0 / 0.3),
+    0 12px 36px -16px rgb(0 0 0 / 0.65);
 }
-.glass-strong {
-  background: color-mix(in oklch, var(--card) 88%, transparent);
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
-  border: 1px solid color-mix(in oklch, white 10%, transparent);
+.rf-panel-soft {
+  background: color-mix(in oklch, var(--card) 60%, transparent);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  border: 1px solid color-mix(in oklch, white 6%, transparent);
 }
 
-/* ---------- Brand gradient text ---------- */
-.brand-gradient {
-  background-image: linear-gradient(100deg, oklch(0.82 0.17 75), oklch(0.74 0.19 55) 45%, oklch(0.66 0.23 18));
+/* Inset surface — used for inputs and dropzone interiors */
+.rf-inset {
+  background: color-mix(in oklch, black 18%, var(--card));
+  border: 1px solid color-mix(in oklch, white 5%, transparent);
+}
+
+/* Brand gradient — warm amber → ember */
+.rf-brand {
+  background-image: linear-gradient(105deg, oklch(0.85 0.15 80), oklch(0.76 0.18 58) 48%, oklch(0.66 0.21 28));
+}
+.rf-brand-text {
+  background-image: linear-gradient(105deg, oklch(0.86 0.14 82), oklch(0.76 0.18 58) 50%, oklch(0.68 0.20 30));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
-.brand-gradient-bg {
-  background-image: linear-gradient(100deg, oklch(0.82 0.17 75), oklch(0.74 0.19 55) 45%, oklch(0.66 0.23 18));
+
+/* Section header — small caps label with leading dot */
+.rf-section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.rf-section-label::before {
+  content: "";
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, oklch(0.82 0.15 75), oklch(0.66 0.21 28));
+  box-shadow: 0 0 8px color-mix(in oklch, oklch(0.74 0.18 55) 60%, transparent);
 }
 
-/* ---------- Custom scrollbars ---------- */
+/* Custom scrollbars — slim, subtle */
 .rf-scroll {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklch, white 16%, transparent) transparent;
+  scrollbar-color: color-mix(in oklch, white 14%, transparent) transparent;
 }
 .rf-scroll::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
 }
 .rf-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 .rf-scroll::-webkit-scrollbar-thumb {
-  background: color-mix(in oklch, white 14%, transparent);
+  background: color-mix(in oklch, white 12%, transparent);
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 .rf-scroll::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklch, white 26%, transparent);
+  background: color-mix(in oklch, white 22%, transparent);
   background-clip: padding-box;
 }
 
-/* ---------- Drag affordances ---------- */
+/* Drag affordances */
 .rf-dragging-source {
-  opacity: 0.35;
+  opacity: 0.3;
 }
 .rf-drop-active {
-  outline: 2px dashed color-mix(in oklch, white 55%, transparent);
-  outline-offset: -4px;
-  background: color-mix(in oklch, white 6%, transparent);
+  background: color-mix(in oklch, oklch(0.82 0.15 70) 7%, transparent) !important;
+  box-shadow: inset 0 0 0 2px color-mix(in oklch, oklch(0.82 0.15 70) 55%, transparent);
 }
 
-/* Hide number input spinners */
+/* Native color input reset */
 input[type="color"] {
   -webkit-appearance: none;
   appearance: none;
@@ -210,11 +244,26 @@ input[type="color"]::-webkit-color-swatch {
   border-radius: 8px;
 }
 
-/* Subtle entrance animation utility */
+/* Entrance animation */
 @keyframes rf-rise {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .rf-rise {
-  animation: rf-rise 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: rf-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes rf-pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.rf-live-dot {
+  animation: rf-pulse-dot 1.8s ease-in-out infinite;
+}
+
+/* When capturing the board for PNG export, hide UI chrome */
+.rf-exporting .rf-no-export {
+  display: none !important;
+}
+.rf-exporting .rf-export-bg {
+  background: var(--background) !important;
 }

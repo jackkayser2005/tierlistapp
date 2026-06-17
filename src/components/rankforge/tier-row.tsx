@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronUp, ChevronDown, Trash2, Palette, GripVertical } from "lucide-react";
+import { ChevronUp, ChevronDown, Trash2, Palette } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,23 +49,26 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
   };
 
   return (
-    <div className="rf-rise group flex overflow-hidden rounded-2xl glass">
-      {/* Label cell */}
+    <div className="rf-rise group relative flex overflow-hidden rounded-2xl rf-panel">
+      {/* Label cell — fixed width, refined gradient */}
       <div
-        className="relative flex w-20 shrink-0 flex-col justify-between p-2 sm:w-28 sm:p-3"
+        className="relative flex w-[4.5rem] shrink-0 flex-col items-center justify-between gap-1 py-2.5 sm:w-24 sm:py-3"
         style={{
-          background: `linear-gradient(150deg, ${tier.color}, color-mix(in srgb, ${tier.color} 55%, #000))`,
+          background: `linear-gradient(160deg, color-mix(in srgb, ${tier.color} 92%, white 8%), color-mix(in srgb, ${tier.color} 62%, black 38%))`,
           color: textColor,
         }}
       >
+        {/* soft highlight */}
         <div
-          className="pointer-events-none absolute inset-0 opacity-30"
+          aria-hidden
+          className="pointer-events-none absolute inset-0 opacity-40"
           style={{
             backgroundImage:
-              "radial-gradient(circle at 30% 20%, rgba(255,255,255,0.45), transparent 60%)",
+              "radial-gradient(80% 50% at 50% 0%, rgba(255,255,255,0.5), transparent 70%)",
           }}
         />
-        <div className="relative flex items-start justify-center">
+        {/* tier name */}
+        <div className="relative flex w-full items-center justify-center px-1">
           <input
             value={draftName}
             onChange={(e) => setDraftName(e.target.value)}
@@ -78,22 +81,26 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
               }
             }}
             aria-label="Tier name"
-            className="w-full bg-transparent text-center text-2xl font-black tracking-tight uppercase outline-none transition focus:rounded-md focus:bg-black/20 sm:text-3xl"
+            className="w-full bg-transparent text-center text-2xl font-black tracking-tight uppercase outline-none transition focus:rounded-md focus:bg-black/15 sm:text-[1.75rem]"
             style={{ color: textColor }}
             maxLength={14}
           />
         </div>
 
-        <div className="relative flex items-center justify-center gap-0.5">
+        {/* subtle controls — appear on hover, secondary */}
+        <div
+          className="rf-no-export relative flex items-center gap-0.5 rounded-full bg-black/15 px-1 py-0.5 opacity-0 backdrop-blur-sm transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
           <Popover open={colorOpen} onOpenChange={setColorOpen}>
             <PopoverTrigger asChild>
               <Button
                 size="icon"
                 variant="ghost"
-                className="size-7 rounded-md text-current hover:bg-black/20 hover:text-current"
+                className="size-6 rounded-full text-current hover:bg-black/25 hover:text-current"
                 aria-label="Change tier color"
               >
-                <Palette className="size-4" />
+                <Palette className="size-3.5" />
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-64 p-3" align="start">
@@ -114,12 +121,12 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
               <Button
                 size="icon"
                 variant="ghost"
-                className="size-7 rounded-md text-current hover:bg-black/20 hover:text-current disabled:opacity-30"
+                className="size-6 rounded-full text-current hover:bg-black/25 hover:text-current disabled:opacity-25"
                 aria-label="Move tier up"
                 disabled={index === 0}
                 onClick={() => reorderTier(tier.id, "up")}
               >
-                <ChevronUp className="size-4" />
+                <ChevronUp className="size-3.5" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>Move up</TooltipContent>
@@ -130,12 +137,12 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
               <Button
                 size="icon"
                 variant="ghost"
-                className="size-7 rounded-md text-current hover:bg-black/20 hover:text-current disabled:opacity-30"
+                className="size-6 rounded-full text-current hover:bg-black/25 hover:text-current disabled:opacity-25"
                 aria-label="Move tier down"
                 disabled={index === total - 1}
                 onClick={() => reorderTier(tier.id, "down")}
               >
-                <ChevronDown className="size-4" />
+                <ChevronDown className="size-3.5" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>Move down</TooltipContent>
@@ -146,23 +153,21 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
               <Button
                 size="icon"
                 variant="ghost"
-                className="size-7 rounded-md text-current hover:bg-black/30 hover:text-current"
+                className="size-6 rounded-full text-current hover:bg-black/35 hover:text-current"
                 aria-label="Delete tier"
                 onClick={() => {
                   deleteTier(tier.id);
                   toast(`Tier “${tier.name}” deleted`, {
-                    description: "Its items moved to the Unranked pool.",
+                    description: "Its items moved to Unranked.",
                   });
                 }}
               >
-                <Trash2 className="size-4" />
+                <Trash2 className="size-3.5" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>Delete tier</TooltipContent>
           </Tooltip>
         </div>
-
-        <GripVertical className="pointer-events-none absolute right-1 top-1 size-3.5 opacity-40" />
       </div>
 
       {/* Dropzone */}
@@ -172,11 +177,11 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
           itemIds={tierItemIds}
           items={items}
           isHighlighted={isHighlighted}
-          className="min-h-[7rem] sm:min-h-[8rem]"
+          className="min-h-[6.5rem] sm:min-h-[7.5rem]"
           emptyState={
-            <p className="text-xs text-muted-foreground">
+            <span className="text-xs text-muted-foreground/70">
               Drop cards here to rank them
-            </p>
+            </span>
           }
         />
       </div>

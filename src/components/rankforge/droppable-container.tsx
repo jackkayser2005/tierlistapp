@@ -38,13 +38,13 @@ export function DroppableContainer({
       <div
         ref={setNodeRef}
         className={cn(
-          "rf-scroll flex flex-wrap content-start gap-2 p-3 transition-colors duration-150",
+          "rf-scroll flex flex-wrap content-start gap-2 p-3 transition-all duration-150",
           (isOver || isHighlighted) && "rf-drop-active",
           className
         )}
       >
         {itemIds.length === 0 && emptyState ? (
-          <div className="flex w-full items-center justify-center py-2 text-center">
+          <div className="flex w-full items-center justify-center py-3 text-center">
             {emptyState}
           </div>
         ) : (

@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, Trash2, Pencil, ImageOff } from "lucide-react";
+import { Trash2, Pencil, ImageOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,8 @@ import { Input } from "@/components/ui/input";
 import { useRankForge } from "@/lib/store";
 import type { TierItem } from "@/lib/tierlist";
 
-const CARD_SIZE = "size-20 sm:size-24 shrink-0";
+const CARD_W = "w-[4.75rem] sm:w-24";
+const CARD_H = "h-[4.75rem] sm:h-24";
 
 interface CardViewProps {
   item: TierItem;
@@ -19,7 +20,7 @@ interface CardViewProps {
   dragging?: boolean;
 }
 
-/** Pure presentational card — used both in the board and the drag overlay. */
+/** Pure presentational card — used in the board and the drag overlay. */
 function ItemCardView({ item, className, dragging }: CardViewProps) {
   const [imgError, setImgError] = React.useState(false);
   const showImage = item.type === "image" && item.imageUrl && !imgError;
@@ -27,12 +28,14 @@ function ItemCardView({ item, className, dragging }: CardViewProps) {
   return (
     <div
       className={cn(
-        "group relative select-none overflow-hidden rounded-xl border border-white/10 bg-card/80 shadow-sm",
-        "transition-transform duration-150 will-change-transform",
+        "group relative select-none overflow-hidden rounded-xl border border-white/10",
+        "bg-card shadow-sm transition-all duration-150 will-change-transform",
+        "ring-1 ring-inset ring-white/[0.03]",
         dragging
-          ? "rotate-2 scale-105 shadow-xl ring-2 ring-white/30"
-          : "hover:-translate-y-0.5 hover:shadow-md",
-        CARD_SIZE,
+          ? "rotate-2 scale-105 shadow-2xl ring-2 ring-amber-300/50"
+          : "hover:-translate-y-0.5 hover:shadow-lg hover:border-white/20",
+        CARD_W,
+        CARD_H,
         className
       )}
     >
@@ -45,23 +48,30 @@ function ItemCardView({ item, className, dragging }: CardViewProps) {
             onError={() => setImgError(true)}
             className="absolute inset-0 size-full object-cover"
           />
-          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/35 to-transparent p-1.5 pt-5">
-            <p className="line-clamp-2 text-[11px] font-semibold leading-tight text-white drop-shadow">
+          {/* readable label overlay */}
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/45 to-transparent p-1.5 pt-6">
+            <p className="line-clamp-2 text-[11px] font-semibold leading-tight text-white drop-shadow-sm">
               {item.label}
             </p>
           </div>
         </>
       ) : (
-        <div className="flex size-full flex-col items-center justify-center gap-1 p-2 text-center">
-          {imgError ? <ImageOff className="size-4 text-muted-foreground" /> : null}
-          <span className="line-clamp-3 text-xs font-semibold leading-tight text-foreground/90">
+        <div className="flex size-full flex-col items-center justify-center gap-1.5 px-2 text-center">
+          {imgError ? (
+            <ImageOff className="size-4 text-muted-foreground/70" />
+          ) : (
+            <span className="grid size-5 place-items-center rounded-md bg-white/[0.06] text-[10px] font-bold text-muted-foreground">
+              {item.label.charAt(0).toUpperCase()}
+            </span>
+          )}
+          <span className="line-clamp-3 text-[11px] font-semibold leading-tight text-foreground/85">
             {item.label}
           </span>
         </div>
       )}
 
-      {/* subtle top gloss */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+      {/* top gloss */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
     </div>
   );
 }
@@ -106,22 +116,23 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
       <div
         {...attributes}
         {...listeners}
-        className="cursor-grab active:cursor-grabbing"
+        className="cursor-grab touch-none active:cursor-grabbing"
       >
         <ItemCardView item={item} />
       </div>
 
-      {/* Action buttons — stop pointer propagation so they never start a drag */}
+      {/* Hover actions — hidden in PNG export via rf-no-export */}
       <div
         onPointerDown={stop}
-        className="absolute -right-1.5 -top-1.5 flex gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
+        data-rf-skip="true"
+        className="rf-no-export absolute -right-1.5 -top-1.5 flex gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
       >
         <Popover open={editOpen} onOpenChange={setEditOpen}>
           <PopoverTrigger asChild>
             <Button
               size="icon"
               variant="secondary"
-              className="size-6 rounded-full border border-white/10 bg-background/90 shadow-md backdrop-blur"
+              className="size-6 rounded-full border border-white/10 bg-background/95 text-foreground shadow-md backdrop-blur hover:bg-background"
               aria-label={`Rename ${item.label}`}
             >
               <Pencil className="size-3" />
@@ -175,17 +186,12 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
         <Button
           size="icon"
           variant="secondary"
-          className="size-6 rounded-full border border-white/10 bg-background/90 text-destructive shadow-md backdrop-blur hover:bg-destructive hover:text-white"
+          className="size-6 rounded-full border border-white/10 bg-background/95 text-destructive shadow-md backdrop-blur hover:bg-destructive hover:text-white"
           aria-label={`Remove ${item.label}`}
           onClick={() => deleteItem(item.id)}
         >
           <Trash2 className="size-3" />
         </Button>
-      </div>
-
-      {/* grip hint */}
-      <div className="pointer-events-none absolute bottom-1 left-1 text-white/40 opacity-0 transition-opacity group-hover:opacity-100">
-        <GripVertical className="size-3.5" />
       </div>
     </div>
   );

@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Palette,
   Layers,
+  Image as ImageIcon,
   FileJson,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -41,6 +42,7 @@ import {
 import { useRankForge, buildExport } from "@/lib/store";
 import { normalizeBoard, type RankForgeBoard } from "@/lib/tierlist";
 import { ColorPicker } from "./color-picker";
+import { MultiplayerPanel } from "./multiplayer-panel";
 import { downscaleImage, readFileAsDataURL, slugify } from "@/lib/image";
 import {
   Popover,
@@ -49,29 +51,29 @@ import {
 } from "@/components/ui/popover";
 import { toast } from "sonner";
 
-function Section({
-  title,
-  icon: Icon,
-  description,
+function SectionShell({
+  label,
+  helper,
   children,
+  action,
 }: {
-  title: string;
-  icon: React.ComponentType<{ className?: string }>;
-  description?: string;
+  label: string;
+  helper?: string;
   children: React.ReactNode;
+  action?: React.ReactNode;
 }) {
   return (
     <section className="space-y-3">
-      <div className="flex items-center gap-2">
-        <span className="grid size-7 place-items-center rounded-lg bg-white/5 text-amber-300">
-          <Icon className="size-4" />
-        </span>
-        <div>
-          <h3 className="text-sm font-semibold leading-tight">{title}</h3>
-          {description ? (
-            <p className="text-xs text-muted-foreground">{description}</p>
+      <div className="flex items-start justify-between gap-2">
+        <div className="space-y-0.5">
+          <span className="rf-section-label">{label}</span>
+          {helper ? (
+            <p className="text-xs leading-relaxed text-muted-foreground/80">
+              {helper}
+            </p>
           ) : null}
         </div>
+        {action}
       </div>
       {children}
     </section>
@@ -101,7 +103,6 @@ function AddItemSection() {
     if (!url) return;
     setBusy(true);
     try {
-      // Verify the URL resolves before adding.
       await new Promise<void>((resolve, reject) => {
         const img = new Image();
         img.onload = () => resolve();
@@ -142,29 +143,28 @@ function AddItemSection() {
   };
 
   return (
-    <Section
-      title="Add items"
-      icon={Plus}
-      description="Cards land in Unranked — then drag them onto tiers."
+    <SectionShell
+      label="add items"
+      helper="Cards land in Unranked — then drag them onto tiers."
     >
       <Tabs defaultValue="text" className="w-full">
         <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="text" className="gap-1">
+          <TabsTrigger value="text" className="gap-1.5">
             <Type className="size-3.5" /> Text
           </TabsTrigger>
-          <TabsTrigger value="url" className="gap-1">
+          <TabsTrigger value="url" className="gap-1.5">
             <LinkIcon className="size-3.5" /> URL
           </TabsTrigger>
-          <TabsTrigger value="upload" className="gap-1">
+          <TabsTrigger value="upload" className="gap-1.5">
             <Upload className="size-3.5" /> Upload
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="text" className="mt-3 space-y-2">
+        <TabsContent value="text" className="mt-3">
           <div className="flex gap-2">
             <Input
               value={text}
-              placeholder="e.g. The Office, Tacos, That one meme…"
+              placeholder="e.g. The Office, Tacos, that meme…"
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") addText();
@@ -200,9 +200,6 @@ function AddItemSection() {
               <Plus className="size-4" />
             </Button>
           </div>
-          <p className="text-[11px] text-muted-foreground">
-            Paste any public image link.
-          </p>
         </TabsContent>
 
         <TabsContent value="upload" className="mt-3">
@@ -210,14 +207,18 @@ function AddItemSection() {
             type="button"
             onClick={() => fileRef.current?.click()}
             disabled={busy}
-            className="flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/15 bg-white/[0.03] px-4 py-6 text-center transition hover:border-amber-300/50 hover:bg-white/[0.06] disabled:opacity-50"
+            className="flex w-full items-center gap-3 rounded-xl border border-dashed border-white/12 bg-white/[0.02] px-3.5 py-3 text-left transition hover:border-amber-300/40 hover:bg-white/[0.04] disabled:opacity-50"
           >
-            <Upload className="size-5 text-amber-300" />
-            <span className="text-sm font-medium">
-              {busy ? "Processing…" : "Click to upload images"}
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-white/[0.05] text-amber-300">
+              <Upload className="size-4" />
             </span>
-            <span className="text-[11px] text-muted-foreground">
-              PNG, JPG, GIF — multiple files supported
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">
+                {busy ? "Processing…" : "Upload images"}
+              </span>
+              <span className="block text-[11px] text-muted-foreground">
+                PNG, JPG, GIF — multiple supported
+              </span>
             </span>
           </button>
           <input
@@ -230,7 +231,7 @@ function AddItemSection() {
           />
         </TabsContent>
       </Tabs>
-    </Section>
+    </SectionShell>
   );
 }
 
@@ -242,27 +243,37 @@ function TiersSection() {
   const deleteTier = useRankForge((s) => s.deleteTier);
 
   return (
-    <Section
-      title="Tiers"
-      icon={Layers}
-      description={`${tiers.length} tier${tiers.length === 1 ? "" : "s"} — reorder, recolor, or add more.`}
+    <SectionShell
+      label="manage tiers"
+      helper={`${tiers.length} tier${tiers.length === 1 ? "" : "s"} — reorder, recolor, or add more.`}
+      action={
+        <Button
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          onClick={() => {
+            addTier();
+            toast.success("Tier added");
+          }}
+        >
+          <Plus className="size-3.5" /> Add
+        </Button>
+      }
     >
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         {tiers.map((tier, i) => (
           <div
             key={tier.id}
-            className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-2"
+            className="group flex items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-1.5 transition hover:bg-white/[0.04]"
           >
             <Popover>
               <PopoverTrigger asChild>
                 <button
                   type="button"
-                  className="size-8 shrink-0 rounded-lg border border-white/15 transition hover:scale-105"
+                  className="size-7 shrink-0 rounded-md border border-white/10 transition hover:scale-105"
                   style={{ backgroundColor: tier.color }}
                   aria-label={`Change color for ${tier.name}`}
-                >
-                  <Palette className="hidden" />
-                </button>
+                />
               </PopoverTrigger>
               <PopoverContent className="w-60 p-3" align="start">
                 <p className="mb-2 text-xs font-medium text-muted-foreground">
@@ -279,10 +290,10 @@ function TiersSection() {
               value={tier.name}
               maxLength={14}
               onChange={(e) => updateTier(tier.id, { name: e.target.value })}
-              className="h-8 flex-1 font-semibold"
+              className="h-8 flex-1 border-transparent bg-transparent px-1.5 font-semibold shadow-none focus-visible:bg-white/[0.04]"
             />
 
-            <div className="flex items-center">
+            <div className="flex items-center opacity-60 transition group-hover:opacity-100">
               <Button
                 size="icon"
                 variant="ghost"
@@ -306,7 +317,7 @@ function TiersSection() {
               <Button
                 size="icon"
                 variant="ghost"
-                className="size-7 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                 onClick={() => {
                   deleteTier(tier.id);
                   toast(`Tier “${tier.name}” deleted`, {
@@ -321,18 +332,7 @@ function TiersSection() {
           </div>
         ))}
       </div>
-
-      <Button
-        variant="outline"
-        className="w-full border-dashed"
-        onClick={() => {
-          addTier();
-          toast.success("Tier added");
-        }}
-      >
-        <Plus className="size-4" /> Add tier
-      </Button>
-    </Section>
+    </SectionShell>
   );
 }
 
@@ -343,7 +343,7 @@ function BoardSection() {
   const resetBoard = useRankForge((s) => s.resetBoard);
 
   return (
-    <Section title="Board" icon={FileJson} description="Name your list and start fresh.">
+    <SectionShell label="board settings">
       <div className="space-y-2">
         <Input
           value={title}
@@ -362,7 +362,10 @@ function BoardSection() {
 
       <AlertDialog>
         <AlertDialogTrigger asChild>
-          <Button variant="outline" className="w-full text-destructive hover:text-destructive">
+          <Button
+            variant="ghost"
+            className="w-full text-muted-foreground hover:text-destructive"
+          >
             <RotateCcw className="size-4" /> Reset to starter board
           </Button>
         </AlertDialogTrigger>
@@ -371,7 +374,7 @@ function BoardSection() {
             <AlertDialogTitle>Reset the board?</AlertDialogTitle>
             <AlertDialogDescription>
               This replaces your current tiers and items with the starter
-              board. Your current list will be lost. Consider exporting it first.
+              board. Your current list will be lost — consider exporting first.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -388,11 +391,11 @@ function BoardSection() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Section>
+    </SectionShell>
   );
 }
 
-function ShareSection() {
+function ShareSection({ onExportPng, exporting }: { onExportPng: () => void; exporting: boolean }) {
   const title = useRankForge((s) => s.title);
   const description = useRankForge((s) => s.description);
   const tiers = useRankForge((s) => s.tiers);
@@ -460,18 +463,34 @@ function ShareSection() {
   };
 
   return (
-    <Section title="Save & share" icon={Download} description="Export to share, import to reload.">
+    <SectionShell label="save & share">
+      {/* Primary: PNG export */}
+      <Button
+        onClick={onExportPng}
+        disabled={exporting}
+        className="w-full rf-brand text-white hover:opacity-90"
+      >
+        <ImageIcon className="size-4" />
+        {exporting ? "Rendering…" : "Export as PNG"}
+      </Button>
+
+      {/* Secondary: JSON */}
       <div className="grid grid-cols-2 gap-2">
-        <Button onClick={handleExport} className="col-span-2 brand-gradient-bg text-white hover:opacity-90">
-          <Download className="size-4" /> Export JSON
+        <Button variant="outline" onClick={handleExport}>
+          <Download className="size-4" /> JSON
         </Button>
         <Button variant="outline" onClick={handleCopy}>
           <ClipboardCopy className="size-4" /> Copy
         </Button>
-        <Button variant="outline" onClick={() => importRef.current?.click()}>
-          <FolderOpen className="size-4" /> Import
-        </Button>
       </div>
+
+      <Button
+        variant="ghost"
+        className="w-full text-muted-foreground"
+        onClick={() => importRef.current?.click()}
+      >
+        <FolderOpen className="size-4" /> Import JSON
+      </Button>
       <input
         ref={importRef}
         type="file"
@@ -479,20 +498,31 @@ function ShareSection() {
         className="hidden"
         onChange={(e) => handleImportFile(e.target.files)}
       />
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-[11px] leading-relaxed text-muted-foreground/70">
         Everything also auto-saves to this browser.
       </p>
-    </Section>
+    </SectionShell>
   );
 }
 
-export function ControlPanelContent({ className }: { className?: string }) {
+interface ControlPanelContentProps {
+  onExportPng: () => void;
+  exporting: boolean;
+  className?: string;
+}
+
+export function ControlPanelContent({
+  onExportPng,
+  exporting,
+  className,
+}: ControlPanelContentProps) {
   return (
-    <div className={cn("space-y-6", className)}>
+    <div className={cn("space-y-7", className)}>
+      <MultiplayerPanel />
       <AddItemSection />
       <TiersSection />
       <BoardSection />
-      <ShareSection />
+      <ShareSection onExportPng={onExportPng} exporting={exporting} />
     </div>
   );
 }

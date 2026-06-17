@@ -40,34 +40,34 @@ export interface RankForgeExport {
   board: RankForgeBoard;
 }
 
-/** Curated palette offered in the tier color picker. */
+/** Curated palette offered in the tier color picker — refined, slightly muted. */
 export const TIER_COLOR_PRESETS: string[] = [
-  "#e11d48", // rose
-  "#ef4444", // red
-  "#f97316", // orange
-  "#f59e0b", // amber
-  "#eab308", // yellow
-  "#84cc16", // lime
-  "#22c55e", // green
-  "#10b981", // emerald
-  "#14b8a6", // teal
-  "#06b6d4", // cyan
-  "#0ea5e9", // sky
-  "#3b82f6", // blue
-  "#6366f1", // indigo
-  "#8b5cf6", // violet
-  "#a855f7", // purple
-  "#d946ef", // fuchsia
-  "#ec4899", // pink
-  "#64748b", // slate
+  "#be123c", // crimson
+  "#dc2626", // red
+  "#ea580c", // orange
+  "#d97706", // amber
+  "#ca8a04", // gold
+  "#65a30d", // olive
+  "#16a34a", // green
+  "#059669", // emerald
+  "#0d9488", // teal
+  "#0891b2", // cyan
+  "#0284c7", // sky
+  "#2563eb", // blue
+  "#4f46e5", // indigo
+  "#7c3aed", // violet
+  "#9333ea", // purple
+  "#c026d3", // fuchsia
+  "#db2777", // pink
+  "#475569", // slate
 ];
 
 const DEFAULT_TIER_COLORS: Record<string, string> = {
-  S: "#e11d48",
-  A: "#f97316",
-  B: "#eab308",
-  C: "#22c55e",
-  D: "#64748b",
+  S: "#dc2626",
+  A: "#ea580c",
+  B: "#ca8a04",
+  C: "#16a34a",
+  D: "#475569",
 };
 
 function makeId(prefix: string): string {
