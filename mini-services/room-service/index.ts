@@ -1,15 +1,37 @@
 /**
- * RankForge Room Service
- * ----------------------
- * A standalone socket.io mini-service that powers real-time collaboration
- * on a shared RankForge tier-list board. Multiple clients join the same
- * short room code (e.g. "ABC123") and broadcast board changes to each other.
+ * RankForge Room Service  —  Real-time collaborative tier-list server.
+ * --------------------------------------------------------------
+ * Standalone socket.io mini-service that powers real-time collaboration
+ * on a shared RankForge tier-list board. Supports up to 10 users per room
+ * with presence, identity, activity log, heartbeats, idempotency (seq),
+ * and reconnection resync.
  *
  * Runs on a FIXED port 3003. The Next.js frontend connects via the Caddy
- * gateway using `io("/?XTransformPort=3003")` — the gateway forwards
- * based on that query param, so we just bind :3003 and accept all origins.
+ * gateway using `io("/?XTransformPort=3003")` — the gateway forwards based
+ * on that query param, so we just bind :3003 and accept all origins.
  *
  * State is in-memory only (no database). Rooms are dropped on restart.
+ *
+ * Lifecycle:
+ *   1. Client connects (socket established, but no user yet).
+ *   2. Client emits `identity` { name, color }   -> stored on socket.data.
+ *   3. Client emits `room:join` { roomId, board? } -> becomes a full member.
+ *   4. Client emits `heartbeat` every ~20s        -> refreshes lastSeen.
+ *   5. Server sweeps every 15s; any member with lastSeen > 45s is force-
+ *      disconnected (reclaims dead sessions).
+ *   6. On disconnect: member removed, presence re-broadcast, host promoted
+ *      (first remaining by Map insertion order), active vote scrubbed,
+ *      "left" activity logged.
+ *
+ * seq numbers: every state-changing broadcast (board:update relay, vote:state,
+ * vote:result, presence:update, activity:new) increments `room.seq` and
+ * includes the new seq in its payload. Clients use this as a monotonic
+ * ordering signal for reconciliation / gap detection.
+ *
+ * Idempotency: `board:update` carries an optional `eventId`. The server does
+ * NOT dedupe by eventId (full-board sync is inherently idempotent), but it
+ * relays `{ board, seq, eventId }` so clients can skip their own echo
+ * (match eventId) and detect gaps (seq).
  */
 
 import { createServer } from 'node:http'
@@ -19,8 +41,36 @@ import { Server, type Socket } from 'socket.io'
 // Types
 // ---------------------------------------------------------------------------
 
-/** Minimal shape of a board payload — we treat it as an opaque JSON object. */
+/** Minimal shape of a board payload — treated as an opaque JSON object. */
 type Board = Record<string, unknown> | null
+
+/** A user present in a room. `id` is the socket id (unique per connection). */
+interface User {
+  id: string // socket id
+  name: string // display name, max 20 chars
+  color: string // hex color for avatar, e.g. "#f43f5e"
+  presence: 'online' | 'idle' | 'dragging' | 'voting'
+  lastSeen: number // epoch ms, updated on heartbeat / activity
+}
+
+/** A single line in the room activity log. */
+interface ActivityEntry {
+  id: string // unique id (crypto.randomUUID with fallback)
+  userId: string
+  userName: string
+  action:
+    | 'joined'
+    | 'left'
+    | 'added'
+    | 'moved'
+    | 'deleted'
+    | 'vote_started'
+    | 'voted'
+    | 'vote_ended'
+    | 'vote_cancelled'
+  detail: string // human-readable, e.g. "Street Tacos to A", "S for Arcade Night"
+  ts: number // epoch ms
+}
 
 /** Active vote on a single item. `votes` maps voter socket id -> chosen tierId. */
 interface VoteState {
@@ -30,16 +80,53 @@ interface VoteState {
   startedBy: string // socket id of the host who started it
 }
 
+/** Full per-room state. */
 interface RoomState {
-  /** socket ids currently in the room */
-  members: Set<string>
-  /** socket id of the room host (first joiner); stays until disconnect */
+  /** socket id -> User. Map preserves insertion order = join order. */
+  members: Map<string, User>
+  /** socket id of the room host (first joiner); promoted on disconnect. */
   host: string | null
-  /** latest board snapshot so late joiners can hydrate immediately */
+  /** latest board snapshot so late joiners can hydrate immediately. */
   board: Board
-  /** active vote, if any; null when no vote is in progress */
+  /** active vote, if any; null when no vote is in progress. */
   vote: VoteState | null
+  /** last 40 activity entries, newest last. */
+  activity: ActivityEntry[]
+  /** server sequence counter; increments on each state-changing broadcast. */
+  seq: number
 }
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Hard cap on members per room. */
+const MAX_MEMBERS = 10
+
+/** Activity log cap (last N entries kept). */
+const MAX_ACTIVITY = 40
+
+/** Heartbeat sweep interval (server-side reaper). */
+const HEARTBEAT_SWEEP_MS = 15_000
+
+/** A member is considered dead if no heartbeat for this long. */
+const HEARTBEAT_TIMEOUT_MS = 45_000
+
+/** Allowed presence states. */
+const PRESENCE_STATES = new Set(['online', 'idle', 'dragging', 'voting'])
+
+/** Allowed activity actions (for the client-driven `activity:log` event). */
+const ALLOWED_ACTIONS = new Set([
+  'joined',
+  'left',
+  'added',
+  'moved',
+  'deleted',
+  'vote_started',
+  'voted',
+  'vote_ended',
+  'vote_cancelled',
+])
 
 // ---------------------------------------------------------------------------
 // In-memory store
@@ -55,14 +142,46 @@ const rooms = new Map<string, RoomState>()
 const socketRooms = new Map<string, Set<string>>()
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Small utilities
+// ---------------------------------------------------------------------------
+
+/** Generate a unique id (crypto.randomUUID with safe fallback). */
+function uuid(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+  } catch {
+    /* fall through */
+  }
+  return Math.random().toString(36).slice(2) + Date.now().toString(36)
+}
+
+/** Best-effort human label for an item object, falling back to itemId. */
+function itemLabel(item: Record<string, unknown> | null, fallback: string): string {
+  if (item && typeof item === 'object') {
+    if (typeof item.label === 'string' && item.label.trim()) return item.label.trim()
+    if (typeof item.name === 'string' && item.name.trim()) return item.name.trim()
+  }
+  return fallback
+}
+
+// ---------------------------------------------------------------------------
+// Room helpers
 // ---------------------------------------------------------------------------
 
 /** Get-or-create a RoomState for a given room id. */
 function getOrCreateRoom(roomId: string): RoomState {
   let room = rooms.get(roomId)
   if (!room) {
-    room = { members: new Set<string>(), host: null, board: null, vote: null }
+    room = {
+      members: new Map<string, User>(),
+      host: null,
+      board: null,
+      vote: null,
+      activity: [],
+      seq: 0,
+    }
     rooms.set(roomId, room)
   }
   return room
@@ -83,16 +202,18 @@ function rememberRoom(socketId: string, roomId: string): void {
   set.add(roomId)
 }
 
-/** Remove a socket from a room and clean up the reverse index. */
+/**
+ * Remove a socket from a room and clean up the reverse index. If the host
+ * left, promote the first remaining member by Map insertion order (which is
+ * the join order). Does NOT broadcast — the caller is responsible for that.
+ */
 function forgetRoom(socketId: string, roomId: string): void {
   const room = rooms.get(roomId)
   if (room) {
     room.members.delete(socketId)
-    // If the host left, promote any remaining member (deterministic: lowest id).
     if (room.host === socketId) {
-      const next = room.members.size > 0
-        ? Array.from(room.members).sort()[0]
-        : null
+      // Promote the first remaining member by insertion order.
+      const next = room.members.size > 0 ? (room.members.keys().next().value ?? null) : null
       room.host = next
     }
     // If empty, we keep the snapshot in memory so a quick reconnect restores
@@ -101,14 +222,71 @@ function forgetRoom(socketId: string, roomId: string): void {
   socketRooms.get(socketId)?.delete(roomId)
 }
 
+/** Return the list of members in join order (Map insertion order). */
+function presenceList(room: RoomState): User[] {
+  return Array.from(room.members.values())
+}
+
+/** Return the last MAX_ACTIVITY activity entries (newest last). */
+function activityPayload(room: RoomState): ActivityEntry[] {
+  return room.activity.slice(-MAX_ACTIVITY)
+}
+
+/** Push an activity entry and cap the stored log at MAX_ACTIVITY. */
+function pushActivity(room: RoomState, entry: ActivityEntry): void {
+  room.activity.push(entry)
+  while (room.activity.length > MAX_ACTIVITY) {
+    room.activity.shift()
+  }
+}
+
+/** Increment and return the next sequence number for the room. */
+function nextSeq(room: RoomState): number {
+  return ++room.seq
+}
+
+// ---------------------------------------------------------------------------
+// Broadcast helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Broadcast `presence:update` to everyone in the room (including sender).
+ * Includes the member list, the current host id, and the new seq.
+ * (The `host` field lets clients update host badges after promotion.)
+ */
+function broadcastPresence(io: Server, room: RoomState, roomId: string): void {
+  const seq = nextSeq(room)
+  io.to(roomId).emit('presence:update', {
+    members: presenceList(room),
+    host: room.host,
+    seq,
+  })
+}
+
+/**
+ * Push an activity entry to the log, then broadcast `activity:new` to the
+ * whole room (including sender) with the new seq.
+ */
+function broadcastActivity(
+  io: Server,
+  room: RoomState,
+  roomId: string,
+  entry: ActivityEntry,
+): void {
+  pushActivity(room, entry)
+  const seq = nextSeq(room)
+  io.to(roomId).emit('activity:new', { entry, seq })
+}
+
 /** Build the vote:state payload to broadcast. tally is { tierId: count }. */
-function voteStatePayload(room: RoomState): {
+function voteStatePayload(room: RoomState, seq?: number): {
   active: boolean
   itemId: string | null
   item: Record<string, unknown> | null
   tally: Record<string, number>
   voterCount: number
   totalPeers: number
+  seq: number
 } {
   const vote = room.vote
   const tally: Record<string, number> = {}
@@ -126,6 +304,7 @@ function voteStatePayload(room: RoomState): {
     tally,
     voterCount,
     totalPeers: room.members.size,
+    seq: seq ?? room.seq,
   }
 }
 
@@ -153,15 +332,73 @@ const io = new Server(httpServer, {
 })
 
 // ---------------------------------------------------------------------------
+// Heartbeat sweep (server-side reaper)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every HEARTBEAT_SWEEP_MS, iterate all rooms and force-disconnect any member
+ * whose `lastSeen` is older than HEARTBEAT_TIMEOUT_MS. The normal `disconnect`
+ * handler then takes care of cleanup (presence, host promotion, vote scrub,
+ * activity log). This reclaims dead sessions that the socket.io ping/pong
+ * layer might miss (e.g. half-open TCP).
+ */
+const heartbeatSweep = setInterval(() => {
+  try {
+    const now = Date.now()
+    for (const [roomId, room] of rooms) {
+      for (const [socketId, user] of room.members) {
+        const idle = now - user.lastSeen
+        if (idle > HEARTBEAT_TIMEOUT_MS) {
+          const s = io.sockets.sockets.get(socketId)
+          if (s && s.connected) {
+            console.log(
+              `[heartbeat] force-disconnect ${socketId} in ${roomId} (idle ${idle}ms)`,
+            )
+            // `true` = close the underlying connection. This triggers the
+            // normal `disconnect` handler, which cleans up state.
+            s.disconnect(true)
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[heartbeat] sweep error:', err)
+  }
+}, HEARTBEAT_SWEEP_MS)
+
+// ---------------------------------------------------------------------------
 // Connection lifecycle
 // ---------------------------------------------------------------------------
 
 io.on('connection', (socket: Socket) => {
   console.log(`[connect] ${socket.id}`)
 
+  // ----- identity --------------------------------------------------------
+  // Set display name + color on the socket. Does NOT join a room yet — the
+  // client must follow up with `room:join`. Until then the socket is a
+  // "pending" socket (connected but not a member of any room).
+  socket.on('identity', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { name?: string; color?: string }
+      let name = typeof data.name === 'string' ? data.name.trim().slice(0, 20) : ''
+      if (!name) name = 'Guest'
+      const color =
+        typeof data.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(data.color)
+          ? data.color
+          : '#64748b'
+      socket.data.identity = { name, color }
+      console.log(`[identity] ${socket.id} name=${name} color=${color}`)
+    } catch (err) {
+      console.error(`[identity] error from ${socket.id}:`, err)
+    }
+  })
+
   // ----- room:join -------------------------------------------------------
-  // Client joins (or creates) a room. Optionally carries a board snapshot
-  // (useful when the creator wants to seed the room with an existing tier list).
+  // Join (or create) a room. Enforces the 10-user cap. Reads identity from
+  // socket.data (set via `identity` event; defaults to Guest/#64748b). Sends
+  // the joiner a full state bundle (room:state + presence:update +
+  // activity:sync + vote:state if active), then broadcasts presence + a
+  // "joined" activity to the room.
   socket.on('room:join', (payload: unknown) => {
     try {
       const data = (payload ?? {}) as { roomId?: string; board?: Board }
@@ -171,28 +408,60 @@ io.on('connection', (socket: Socket) => {
         return
       }
 
+      // 10-user cap: reject if the room is already full.
+      const existing = rooms.get(roomId)
+      if (existing && existing.members.size >= MAX_MEMBERS) {
+        socket.emit('room:error', {
+          event: 'room:join',
+          message: 'Room is full (max 10)',
+        })
+        return
+      }
+
       // Leave any rooms this socket was previously in (a socket is in one
-      // RankForge room at a time).
+      // RankForge room at a time). Broadcast presence:update + scrub any
+      // active vote from the old room.
       const previous = socketRooms.get(socket.id)
       if (previous && previous.size > 0) {
         for (const oldRoomId of previous) {
-          socket.leave(oldRoomId)
+          const oldRoom = rooms.get(oldRoomId)
           forgetRoom(socket.id, oldRoomId)
-          io.to(oldRoomId).emit('presence:update', {
-            roomId: oldRoomId,
-            peers: peerCount(oldRoomId),
-          })
+          socket.leave(oldRoomId)
+          if (oldRoom) {
+            broadcastPresence(io, oldRoom, oldRoomId)
+            // If the switching user had voted on an active vote, drop it
+            // and re-broadcast the tally so the count is live.
+            if (oldRoom.vote && oldRoom.vote.votes.has(socket.id)) {
+              oldRoom.vote.votes.delete(socket.id)
+              io.to(oldRoomId).emit('vote:state', voteStatePayload(oldRoom, nextSeq(oldRoom)))
+            }
+          }
         }
       }
 
       const room = getOrCreateRoom(roomId)
       const wasNew = room.members.size === 0
 
+      // Read identity (set via `identity` event; default to Guest/#64748b).
+      const identity =
+        (socket.data?.identity as { name: string; color: string } | undefined) ?? {
+          name: 'Guest',
+          color: '#64748b',
+        }
+
+      const user: User = {
+        id: socket.id,
+        name: identity.name,
+        color: identity.color,
+        presence: 'online',
+        lastSeen: Date.now(),
+      }
+
       socket.join(roomId)
-      room.members.add(socket.id)
+      room.members.set(socket.id, user)
       rememberRoom(socket.id, roomId)
 
-      // First joiner becomes host.
+      // First joiner (or recovered host-less room) becomes host.
       if (wasNew || room.host === null) {
         room.host = socket.id
       }
@@ -204,27 +473,46 @@ io.on('connection', (socket: Socket) => {
 
       const isHost = room.host === socket.id
 
-      // Send full state to the joiner (including current board, if any).
+      // 1. Full state bundle to the joiner.
       socket.emit('room:state', {
         roomId,
         isHost,
         peers: room.members.size,
         board: room.board,
+        seq: room.seq,
       })
 
-      // If a vote is currently active, send its state to the joiner so they
-      // see the voting overlay immediately.
+      // 2. Presence to the joiner (direct; uses current seq, no increment).
+      socket.emit('presence:update', {
+        members: presenceList(room),
+        host: room.host,
+        seq: room.seq,
+      })
+
+      // 3. Activity log to the joiner (last 40 entries).
+      socket.emit('activity:sync', { entries: activityPayload(room) })
+
+      // 4. If a vote is currently active, hydrate the joiner (no seq bump).
       if (room.vote) {
         socket.emit('vote:state', voteStatePayload(room))
       }
 
-      // Tell everyone (including sender) the new peer count.
-      io.to(roomId).emit('presence:update', {
-        roomId,
-        peers: room.members.size,
+      // 5. Broadcast presence to the whole room (including joiner).
+      broadcastPresence(io, room, roomId)
+
+      // 6. Push + broadcast "joined" activity to the whole room.
+      broadcastActivity(io, room, roomId, {
+        id: uuid(),
+        userId: socket.id,
+        userName: user.name,
+        action: 'joined',
+        detail: user.name,
+        ts: Date.now(),
       })
 
-      console.log(`[room:join] ${socket.id} -> ${roomId} (peers=${room.members.size}, host=${isHost})`)
+      console.log(
+        `[room:join] ${socket.id} -> ${roomId} (peers=${room.members.size}, host=${isHost})`,
+      )
     } catch (err) {
       console.error(`[room:join] error from ${socket.id}:`, err)
       socket.emit('room:error', { event: 'room:join', message: 'internal error' })
@@ -234,27 +522,110 @@ io.on('connection', (socket: Socket) => {
   // ----- board:update ----------------------------------------------------
   // A client changed its local board and wants to broadcast to peers.
   // We store the snapshot AND relay to everyone else (NOT back to sender,
-  // since the sender already has the optimistic local state).
+  // since the sender already has the optimistic local state). Includes the
+  // new seq + the client-supplied eventId so peers can skip re-applying their
+  // own echo and detect gaps.
   socket.on('board:update', (payload: unknown) => {
     try {
-      const data = (payload ?? {}) as { roomId?: string; board?: Board }
-      const roomId = typeof data.roomId === 'string' ? data.roomId : ''
-      if (!roomId || data.board === undefined || data.board === null) {
-        return
+      const data = (payload ?? {}) as {
+        roomId?: string
+        board?: Board
+        eventId?: string
       }
+      const roomId = typeof data.roomId === 'string' ? data.roomId : ''
+      if (!roomId || data.board === undefined || data.board === null) return
 
       const room = rooms.get(roomId)
-      if (!room) {
-        // No room yet — create on the fly so the snapshot isn't lost.
-        getOrCreateRoom(roomId).board = data.board
-      } else {
-        room.board = data.board
-      }
+      if (!room) return // must join before updating
 
-      // Relay to every other peer in the room.
-      socket.to(roomId).emit('board:update', { board: data.board })
+      room.board = data.board
+      const seq = nextSeq(room)
+      // Relay to OTHERS only (sender already has optimistic state).
+      socket.to(roomId).emit('board:update', {
+        board: data.board,
+        seq,
+        eventId: typeof data.eventId === 'string' ? data.eventId : undefined,
+      })
     } catch (err) {
       console.error(`[board:update] error from ${socket.id}:`, err)
+    }
+  })
+
+  // ----- activity:log ----------------------------------------------------
+  // Client-driven activity logging. The sender emits this right after a
+  // user-visible board action (add/move/delete) so the activity feed can say
+  // "Mason moved Street Tacos to A" without the server parsing board diffs
+  // (which is fragile). The server just validates, builds the entry, and
+  // broadcasts it to the whole room (including sender).
+  socket.on('activity:log', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string; action?: string; detail?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      const action = typeof data.action === 'string' ? data.action : ''
+      const detail =
+        typeof data.detail === 'string' ? data.detail.trim().slice(0, 120) : ''
+      if (!roomId || !ALLOWED_ACTIONS.has(action)) return
+
+      const room = rooms.get(roomId)
+      if (!room) return
+      const user = room.members.get(socket.id)
+      if (!user) return
+
+      const entry: ActivityEntry = {
+        id: uuid(),
+        userId: socket.id,
+        userName: user.name,
+        action: action as ActivityEntry['action'],
+        detail,
+        ts: Date.now(),
+      }
+      broadcastActivity(io, room, roomId, entry)
+      console.log(`[activity:log] ${socket.id} ${action} "${detail}" in ${roomId}`)
+    } catch (err) {
+      console.error(`[activity:log] error from ${socket.id}:`, err)
+    }
+  })
+
+  // ----- presence:set ----------------------------------------------------
+  // Client tells the server its current fine-grained presence state (online /
+  // idle / dragging / voting). Clients should throttle this on their side.
+  // Server updates the user and re-broadcasts presence to the room.
+  socket.on('presence:set', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string; state?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      const state = typeof data.state === 'string' ? data.state : ''
+      if (!roomId || !PRESENCE_STATES.has(state)) return
+
+      const room = rooms.get(roomId)
+      if (!room) return
+      const user = room.members.get(socket.id)
+      if (!user) return
+
+      user.presence = state as User['presence']
+      user.lastSeen = Date.now()
+      broadcastPresence(io, room, roomId)
+    } catch (err) {
+      console.error(`[presence:set] error from ${socket.id}:`, err)
+    }
+  })
+
+  // ----- heartbeat -------------------------------------------------------
+  // Client emits this every ~20s (no payload). Server refreshes the user's
+  // lastSeen across all rooms they're in. The server-side sweep uses
+  // lastSeen to decide who to force-disconnect.
+  socket.on('heartbeat', () => {
+    try {
+      const joined = socketRooms.get(socket.id)
+      if (!joined || joined.size === 0) return
+      const now = Date.now()
+      for (const roomId of joined) {
+        const room = rooms.get(roomId)
+        const user = room?.members.get(socket.id)
+        if (user) user.lastSeen = now
+      }
+    } catch (err) {
+      console.error(`[heartbeat] error from ${socket.id}:`, err)
     }
   })
 
@@ -279,13 +650,26 @@ io.on('connection', (socket: Socket) => {
   // ----- vote:sync-request ----------------------------------------------
   // A freshly-joined (or reconnecting) client asks for the current vote state
   // so it can show the voting overlay if a vote is in progress. We reply
-  // directly to the requester.
+  // directly to the requester (no seq bump — hydration only).
   socket.on('vote:sync-request', (payload: unknown) => {
     try {
       const data = (payload ?? {}) as { roomId?: string }
       const roomId = typeof data.roomId === 'string' ? data.roomId : ''
       const room = roomId ? rooms.get(roomId) : undefined
-      socket.emit('vote:state', room ? voteStatePayload(room) : { active: false, itemId: null, item: null, tally: {}, voterCount: 0, totalPeers: 0 })
+      socket.emit(
+        'vote:state',
+        room
+          ? voteStatePayload(room)
+          : {
+              active: false,
+              itemId: null,
+              item: null,
+              tally: {},
+              voterCount: 0,
+              totalPeers: 0,
+              seq: 0,
+            },
+      )
     } catch (err) {
       console.error(`[vote:sync-request] error from ${socket.id}:`, err)
     }
@@ -294,6 +678,7 @@ io.on('connection', (socket: Socket) => {
   // ----- vote:start ------------------------------------------------------
   // Host kicks off a vote on a specific item. The item "pops up" for everyone
   // in the room; each peer then casts one vote for a tier via `vote:cast`.
+  // Also logs a "vote_started" activity entry.
   socket.on('vote:start', (payload: unknown) => {
     try {
       const data = (payload ?? {}) as {
@@ -303,7 +688,13 @@ io.on('connection', (socket: Socket) => {
       }
       const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
       const itemId = typeof data.itemId === 'string' ? data.itemId.trim() : ''
-      if (!roomId || !itemId || typeof data.item !== 'object' || data.item === null || Array.isArray(data.item)) {
+      if (
+        !roomId ||
+        !itemId ||
+        typeof data.item !== 'object' ||
+        data.item === null ||
+        Array.isArray(data.item)
+      ) {
         socket.emit('room:error', {
           event: 'vote:start',
           message: 'roomId (string), itemId (string) and item (object) are required',
@@ -328,7 +719,11 @@ io.on('connection', (socket: Socket) => {
         startedBy: socket.id,
       }
 
-      io.to(roomId).emit('vote:state', voteStatePayload(room))
+      io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))
+
+      // NOTE: vote_started activity is sent by the client via activity:log
+      // (the client has the readable item label; we don't duplicate it here).
+
       console.log(`[vote:start] ${socket.id} -> ${roomId} item=${itemId}`)
     } catch (err) {
       console.error(`[vote:start] error from ${socket.id}:`, err)
@@ -339,6 +734,7 @@ io.on('connection', (socket: Socket) => {
   // ----- vote:cast --------------------------------------------------------
   // A peer casts (or re-casts) their vote for a tier on the active item.
   // Stale votes (wrong itemId / no active vote) are ignored silently.
+  // Also logs a "voted" activity entry (detail = "<item label> -> <tierId>").
   socket.on('vote:cast', (payload: unknown) => {
     try {
       const data = (payload ?? {}) as {
@@ -356,7 +752,11 @@ io.on('connection', (socket: Socket) => {
       if (room.vote.itemId !== itemId) return // stale vote
 
       room.vote.votes.set(socket.id, tierId)
-      io.to(roomId).emit('vote:state', voteStatePayload(room))
+      io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))
+
+      // NOTE: voted activity is sent by the client via activity:log
+      // (the client formats it as "S for Arcade Night" which is more readable).
+
       console.log(`[vote:cast] ${socket.id} voted ${tierId} in ${roomId}`)
     } catch (err) {
       console.error(`[vote:cast] error from ${socket.id}:`, err)
@@ -367,7 +767,7 @@ io.on('connection', (socket: Socket) => {
   // Host ends the active vote. Winner = tierId with the highest count; ties
   // broken by ascending alphabetical tierId (deterministic). If no votes were
   // cast, winner = null. Emits `vote:result` then a final inactive `vote:state`
-  // so clients close the overlay.
+  // so clients close the overlay. Also logs a "vote_ended" activity.
   socket.on('vote:end', (payload: unknown) => {
     try {
       const data = (payload ?? {}) as { roomId?: string }
@@ -404,10 +804,14 @@ io.on('connection', (socket: Socket) => {
         itemId: vote.itemId,
         tally,
         winner,
+        seq: nextSeq(room),
       })
 
       room.vote = null
-      io.to(roomId).emit('vote:state', voteStatePayload(room))
+      io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))
+
+      // NOTE: vote_ended activity is sent by the client via activity:log.
+
       console.log(`[vote:end] ${socket.id} -> ${roomId} winner=${winner}`)
     } catch (err) {
       console.error(`[vote:end] error from ${socket.id}:`, err)
@@ -417,7 +821,8 @@ io.on('connection', (socket: Socket) => {
 
   // ----- vote:cancel ------------------------------------------------------
   // Host cancels the active vote without announcing a winner. Just clears
-  // state and broadcasts an inactive `vote:state`.
+  // state and broadcasts an inactive `vote:state`. Also logs a
+  // "vote_cancelled" activity.
   socket.on('vote:cancel', (payload: unknown) => {
     try {
       const data = (payload ?? {}) as { roomId?: string }
@@ -432,8 +837,12 @@ io.on('connection', (socket: Socket) => {
         return
       }
 
+      const wasItemId = room.vote?.itemId ?? ''
       room.vote = null
-      io.to(roomId).emit('vote:state', voteStatePayload(room))
+      io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))
+
+      // NOTE: vote_cancelled activity is sent by the client via activity:log.
+
       console.log(`[vote:cancel] ${socket.id} -> ${roomId}`)
     } catch (err) {
       console.error(`[vote:cancel] error from ${socket.id}:`, err)
@@ -442,28 +851,53 @@ io.on('connection', (socket: Socket) => {
   })
 
   // ----- disconnect ------------------------------------------------------
+  // Remove the socket from every room it was in. For each affected room:
+  //   - re-broadcast presence (with the possibly-new host),
+  //   - push + broadcast a "left" activity,
+  //   - if the user had voted on an active vote, scrub it and re-broadcast.
+  // Finally clear the socket's identity.
   socket.on('disconnect', (reason: string) => {
     try {
       const joined = socketRooms.get(socket.id)
       if (joined) {
         for (const roomId of joined) {
+          const room = rooms.get(roomId)
+          // Capture the user BEFORE forgetRoom mutates the members Map.
+          const user = room?.members.get(socket.id)
+
           forgetRoom(socket.id, roomId)
           socket.leave(roomId)
-          // Notify remaining peers of the new count.
-          io.to(roomId).emit('presence:update', {
-            roomId,
-            peers: peerCount(roomId),
-          })
-          // If the disconnected socket had cast a vote on the active vote,
-          // drop it and re-broadcast the tally so the count is live.
-          const room = rooms.get(roomId)
-          if (room && room.vote && room.vote.votes.has(socket.id)) {
-            room.vote.votes.delete(socket.id)
-            io.to(roomId).emit('vote:state', voteStatePayload(room))
+
+          if (room) {
+            // 1. Broadcast updated presence (includes new host id, if promoted).
+            broadcastPresence(io, room, roomId)
+
+            // 2. Push + broadcast "left" activity.
+            if (user) {
+              broadcastActivity(io, room, roomId, {
+                id: uuid(),
+                userId: socket.id,
+                userName: user.name,
+                action: 'left',
+                detail: user.name,
+                ts: Date.now(),
+              })
+            }
+
+            // 3. If the disconnected user had voted on the active vote, drop
+            //    their vote and re-broadcast the tally so the count is live.
+            if (room.vote && room.vote.votes.has(socket.id)) {
+              room.vote.votes.delete(socket.id)
+              io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))
+            }
           }
         }
         socketRooms.delete(socket.id)
       }
+
+      // Clear identity (forces re-identity on reconnect if socket is reused).
+      socket.data.identity = undefined
+
       console.log(`[disconnect] ${socket.id} (${reason})`)
     } catch (err) {
       console.error(`[disconnect] error from ${socket.id}:`, err)
@@ -484,9 +918,11 @@ httpServer.listen(PORT, () => {
   console.log(`room-service on :${PORT}`)
 })
 
-// Graceful shutdown so `bun --hot` restarts don't leave dangling sockets.
+// Graceful shutdown so `bun --hot` restarts don't leave dangling sockets or
+// a dangling heartbeat interval.
 function shutdown(signal: string): void {
   console.log(`[${signal}] shutting down room-service...`)
+  clearInterval(heartbeatSweep)
   io.close(() => {
     httpServer.close(() => {
       console.log('room-service closed')

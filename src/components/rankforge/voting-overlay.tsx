@@ -87,7 +87,7 @@ export function VotingOverlay() {
               >
                 <X className="size-4" /> Cancel
               </Button>
-              <Button size="sm" className="rf-accent text-black hover:opacity-90" onClick={endVote}>
+              <Button size="sm" className="rf-btn-accent" onClick={endVote}>
                 <Trophy className="size-4" /> End &amp; place
               </Button>
             </div>

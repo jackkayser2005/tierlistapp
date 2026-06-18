@@ -79,39 +79,39 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-/* Refined "midnight" dark theme — deep slate-blue charcoal, cool and rich */
+/* "Afterdark" — rich, punchy, party-ready. Deep indigo base with vibrant accents. */
 .dark {
-  --background: oklch(0.165 0.008 265);
-  --foreground: oklch(0.965 0.005 265);
-  --card: oklch(0.215 0.01 265);
-  --card-foreground: oklch(0.965 0.005 265);
-  --popover: oklch(0.205 0.011 265);
-  --popover-foreground: oklch(0.965 0.005 265);
-  --primary: oklch(0.955 0 0);
-  --primary-foreground: oklch(0.19 0.008 265);
-  --secondary: oklch(0.265 0.012 265);
-  --secondary-foreground: oklch(0.965 0.005 265);
-  --muted: oklch(0.255 0.011 265);
-  --muted-foreground: oklch(0.67 0.014 265);
-  --accent: oklch(0.28 0.014 265);
-  --accent-foreground: oklch(0.965 0.005 265);
+  --background: oklch(0.15 0.012 280);
+  --foreground: oklch(0.97 0.004 280);
+  --card: oklch(0.205 0.014 280);
+  --card-foreground: oklch(0.97 0.004 280);
+  --popover: oklch(0.195 0.016 280);
+  --popover-foreground: oklch(0.97 0.004 280);
+  --primary: oklch(0.96 0 0);
+  --primary-foreground: oklch(0.18 0.01 280);
+  --secondary: oklch(0.265 0.016 280);
+  --secondary-foreground: oklch(0.97 0.004 280);
+  --muted: oklch(0.255 0.014 280);
+  --muted-foreground: oklch(0.68 0.016 280);
+  --accent: oklch(0.295 0.018 280);
+  --accent-foreground: oklch(0.97 0.004 280);
   --destructive: oklch(0.668 0.198 22);
   --border: oklch(1 0 0 / 8%);
   --input: oklch(1 0 0 / 11%);
-  --ring: oklch(0.72 0.14 265);
+  --ring: oklch(0.75 0.16 300);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0.011 265);
-  --sidebar-foreground: oklch(0.965 0.005 265);
-  --sidebar-primary: oklch(0.72 0.14 265);
-  --sidebar-primary-foreground: oklch(0.19 0.008 265);
-  --sidebar-accent: oklch(0.265 0.012 265);
-  --sidebar-accent-foreground: oklch(0.965 0.005 265);
+  --sidebar: oklch(0.198 0.014 280);
+  --sidebar-foreground: oklch(0.97 0.004 280);
+  --sidebar-primary: oklch(0.75 0.16 300);
+  --sidebar-primary-foreground: oklch(0.18 0.01 280);
+  --sidebar-accent: oklch(0.265 0.016 280);
+  --sidebar-accent-foreground: oklch(0.97 0.004 280);
   --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.72 0.14 265);
+  --sidebar-ring: oklch(0.75 0.16 300);
 }
 
 @layer base {
@@ -127,57 +127,57 @@
 }
 
 /* ============================================================
-   RankForge design system
+   RankForge design system — fun, bold, party-ready
    ============================================================ */
 
-/* Ambient app background — layered cool radial glows over slate-charcoal */
+/* Ambient app background — vibrant layered glows over deep indigo */
 .rf-app-bg {
   background-color: var(--background);
   background-image:
-    radial-gradient(46rem 46rem at 86% -10%, color-mix(in oklch, oklch(0.62 0.16 280) 14%, transparent), transparent 62%),
-    radial-gradient(40rem 40rem at -10% 6%, color-mix(in oklch, oklch(0.58 0.14 220) 10%, transparent), transparent 58%),
-    radial-gradient(34rem 34rem at 50% 120%, color-mix(in oklch, oklch(0.66 0.12 190) 5%, transparent), transparent 60%);
+    radial-gradient(44rem 44rem at 88% -8%, color-mix(in oklch, oklch(0.7 0.2 300) 18%, transparent), transparent 60%),
+    radial-gradient(38rem 38rem at -8% 4%, color-mix(in oklch, oklch(0.65 0.22 330) 13%, transparent), transparent 58%),
+    radial-gradient(32rem 32rem at 50% 120%, color-mix(in oklch, oklch(0.68 0.18 200) 7%, transparent), transparent 60%);
   background-attachment: fixed;
 }
 
 /* Glass panels — soft, elevated, translucent */
 .rf-panel {
-  background: color-mix(in oklch, var(--card) 80%, transparent);
-  backdrop-filter: blur(16px) saturate(150%);
-  -webkit-backdrop-filter: blur(16px) saturate(150%);
-  border: 1px solid color-mix(in oklch, white 7%, transparent);
+  background: color-mix(in oklch, var(--card) 82%, transparent);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  border: 1px solid color-mix(in oklch, white 8%, transparent);
   box-shadow:
-    0 1px 0 0 color-mix(in oklch, white 5%, transparent) inset,
+    0 1px 0 0 color-mix(in oklch, white 6%, transparent) inset,
     0 1px 2px 0 rgb(0 0 0 / 0.3),
-    0 12px 36px -16px rgb(0 0 0 / 0.65);
+    0 12px 36px -16px rgb(0 0 0 / 0.7);
 }
 .rf-panel-soft {
-  background: color-mix(in oklch, var(--card) 62%, transparent);
-  backdrop-filter: blur(12px) saturate(140%);
-  -webkit-backdrop-filter: blur(12px) saturate(140%);
-  border: 1px solid color-mix(in oklch, white 6%, transparent);
+  background: color-mix(in oklch, var(--card) 64%, transparent);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  border: 1px solid color-mix(in oklch, white 7%, transparent);
 }
 
-/* Inset surface — used for inputs and dropzone interiors */
+/* Inset surface */
 .rf-inset {
-  background: color-mix(in oklch, black 20%, var(--card));
+  background: color-mix(in oklch, black 22%, var(--card));
   border: 1px solid color-mix(in oklch, white 5%, transparent);
 }
 
-/* Brand gradient — refined indigo → violet → soft magenta */
+/* Brand gradient — vivid violet → magenta */
 .rf-brand {
-  background-image: linear-gradient(105deg, oklch(0.7 0.16 270), oklch(0.66 0.19 295) 50%, oklch(0.62 0.2 320));
+  background-image: linear-gradient(105deg, oklch(0.7 0.2 295), oklch(0.66 0.22 320) 50%, oklch(0.64 0.24 345));
 }
 .rf-brand-text {
-  background-image: linear-gradient(105deg, oklch(0.74 0.15 268), oklch(0.68 0.18 295) 52%, oklch(0.66 0.19 322));
+  background-image: linear-gradient(105deg, oklch(0.78 0.18 290), oklch(0.7 0.2 320) 52%, oklch(0.68 0.22 345));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
 
-/* Accent gradient — warm gold, used sparingly for primary CTAs */
+/* Accent gradient — warm gold for primary CTAs (high contrast on indigo) */
 .rf-accent {
-  background-image: linear-gradient(105deg, oklch(0.82 0.13 85), oklch(0.76 0.15 70));
+  background-image: linear-gradient(105deg, oklch(0.85 0.14 85), oklch(0.8 0.16 65));
 }
 
 /* Section header — small caps label with leading dot */
@@ -196,11 +196,45 @@
   width: 0.375rem;
   height: 0.375rem;
   border-radius: 9999px;
-  background: linear-gradient(135deg, oklch(0.72 0.16 280), oklch(0.66 0.19 310));
-  box-shadow: 0 0 8px color-mix(in oklch, oklch(0.7 0.17 290) 60%, transparent);
+  background: linear-gradient(135deg, oklch(0.72 0.2 300), oklch(0.66 0.22 330));
+  box-shadow: 0 0 8px color-mix(in oklch, oklch(0.72 0.2 320) 65%, transparent);
 }
 
-/* Custom scrollbars — slim, subtle */
+/* Bold playful button — used for primary actions like Start a live room */
+.rf-btn-primary {
+  background-image: linear-gradient(105deg, oklch(0.72 0.2 295), oklch(0.66 0.22 325));
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 4px 14px -4px color-mix(in oklch, oklch(0.7 0.2 320) 60%, transparent);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+}
+.rf-btn-primary:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+  box-shadow: 0 8px 22px -6px color-mix(in oklch, oklch(0.7 0.2 320) 70%, transparent);
+}
+.rf-btn-primary:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* Accent button — gold, for "place" / vote actions */
+.rf-btn-accent {
+  background-image: linear-gradient(105deg, oklch(0.85 0.14 85), oklch(0.8 0.16 65));
+  color: #1a1320;
+  font-weight: 700;
+  box-shadow: 0 4px 14px -4px color-mix(in oklch, oklch(0.82 0.15 75) 55%, transparent);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+}
+.rf-btn-accent:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 8px 22px -6px color-mix(in oklch, oklch(0.82 0.15 75) 65%, transparent);
+}
+.rf-btn-accent:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* Custom scrollbars */
 .rf-scroll {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in oklch, white 14%, transparent) transparent;
@@ -228,8 +262,8 @@
   opacity: 0.3;
 }
 .rf-drop-active {
-  background: color-mix(in oklch, oklch(0.72 0.16 285) 7%, transparent) !important;
-  box-shadow: inset 0 0 0 2px color-mix(in oklch, oklch(0.72 0.16 285) 55%, transparent);
+  background: color-mix(in oklch, oklch(0.72 0.2 310) 8%, transparent) !important;
+  box-shadow: inset 0 0 0 2px color-mix(in oklch, oklch(0.72 0.2 310) 55%, transparent);
 }
 
 /* Native color input reset */
@@ -249,7 +283,7 @@ input[type="color"]::-webkit-color-swatch {
   border-radius: 8px;
 }
 
-/* Entrance animation */
+/* Animations */
 @keyframes rf-rise {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
@@ -271,12 +305,18 @@ input[type="color"]::-webkit-color-swatch {
 .rf-pop-in {
   animation: rf-pop-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+@keyframes rf-glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklch, oklch(0.72 0.2 320) 0%, transparent); }
+  50% { box-shadow: 0 0 24px 4px color-mix(in oklch, oklch(0.72 0.2 320) 35%, transparent); }
+}
+.rf-glow {
+  animation: rf-glow-pulse 2.4s ease-in-out infinite;
+}
 
-/* When capturing the board for PNG export, hide UI chrome */
+/* PNG export: hide chrome, show branded shell */
 .rf-exporting .rf-no-export {
   display: none !important;
 }
-/* Elements shown only in the PNG export (hidden in the live app) */
 .rf-export-only {
   display: none;
 }
@@ -292,7 +332,6 @@ input[type="color"]::-webkit-color-swatch {
   padding: 28px !important;
   border-radius: 20px !important;
 }
-/* In export, give tier rows + unranked a cleaner solid look (no glass blur) */
 .rf-exporting .rf-panel {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;

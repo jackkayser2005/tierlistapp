@@ -89,7 +89,7 @@ export function VotingControls() {
             </Button>
             <Button
               size="sm"
-              className="rf-accent text-black hover:opacity-90"
+              className="rf-btn-accent"
               onClick={endVote}
             >
               <Zap className="size-3.5" /> End &amp; place
@@ -97,9 +97,8 @@ export function VotingControls() {
           </div>
         ) : (
           <Button
-            variant="outline"
             size="sm"
-            className="w-full"
+            className="rf-btn-accent w-full"
             onClick={startNextVote}
             disabled={unranked.length === 0}
           >

@@ -44,7 +44,7 @@ const EMPTY_VOTE: VoteState = {
  * via the board store, which then syncs to everyone through normal board sync.
  */
 export function useVoting() {
-  const { status, roomId, isHost } = useMultiplayer();
+  const { status, roomId, isHost, logActivity, setPresence } = useMultiplayer();
   const [vote, setVote] = React.useState<VoteState>(EMPTY_VOTE);
   const [myVote, setMyVote] = React.useState<string | null>(null);
   const [lastResult, setLastResult] = React.useState<VoteResult | null>(null);
@@ -78,9 +78,12 @@ export function useVoting() {
         setVote(EMPTY_VOTE);
         setMyVote(null);
         votedItemRef.current = null;
+        setPresence("online");
         return;
       }
       setVote(payload);
+      // Mark our presence as voting while a vote is active.
+      setPresence("voting");
       // If the item being voted on changed, forget our local vote choice.
       if (votedItemRef.current !== payload.itemId) {
         votedItemRef.current = payload.itemId;
@@ -93,6 +96,7 @@ export function useVoting() {
       setVote(EMPTY_VOTE);
       setMyVote(null);
       votedItemRef.current = null;
+      setPresence("online");
 
       // Only the host applies the placement, so the board change syncs once.
       if (isHost && payload.winner) {
@@ -102,9 +106,10 @@ export function useVoting() {
           moveItem(itemId, fromContainer, payload.winner, -1);
           const winnerTier = tiers.find((t) => t.id === payload.winner);
           const itemName = items[itemId]?.label ?? "Item";
-          toast.success(`“${itemName}” → ${winnerTier?.name ?? "tier"}`, {
+          toast.success(`"${itemName}" → ${winnerTier?.name ?? "tier"}`, {
             description: summarizeTally(payload.tally, tiers),
           });
+          logActivity("vote_ended", `${itemName} → ${winnerTier?.name ?? "tier"}`);
         }
       }
     };
@@ -124,7 +129,7 @@ export function useVoting() {
       sock.off("vote:result", onResult);
       sock.off("room:error", onError);
     };
-  }, [status, roomId, isHost, findContainerOf, moveItem, tiers, items]);
+  }, [status, roomId, isHost, findContainerOf, moveItem, tiers, items, setPresence, logActivity]);
 
   // ---- Actions ----
   const startVote = React.useCallback(
@@ -135,8 +140,9 @@ export function useVoting() {
       }
       const sock = getSocket();
       sock?.emit("vote:start", { roomId, itemId: item.id, item });
+      logActivity("vote_started", item.label);
     },
-    [roomId, isHost]
+    [roomId, isHost, logActivity]
   );
 
   const castVote = React.useCallback(
@@ -146,8 +152,11 @@ export function useVoting() {
       setMyVote(tierId);
       const sock = getSocket();
       sock?.emit("vote:cast", { roomId, itemId: vote.itemId, tierId });
+      const tierName = tiers.find((t) => t.id === tierId)?.name ?? tierId;
+      const itemName = vote.item?.label ?? "item";
+      logActivity("voted", `${tierName} for ${itemName}`);
     },
-    [roomId, vote.active, vote.itemId]
+    [roomId, vote.active, vote.itemId, vote.item, tiers, logActivity]
   );
 
   const endVote = React.useCallback(() => {
@@ -157,13 +166,15 @@ export function useVoting() {
     }
     const sock = getSocket();
     sock?.emit("vote:end", { roomId });
+    // vote_ended activity is logged in the onResult handler (with the winner).
   }, [roomId, isHost]);
 
   const cancelVote = React.useCallback(() => {
     if (!roomId || !isHost) return;
     const sock = getSocket();
     sock?.emit("vote:cancel", { roomId });
-  }, [roomId, isHost]);
+    logActivity("vote_cancelled", "");
+  }, [roomId, isHost, logActivity]);
 
   return {
     vote,

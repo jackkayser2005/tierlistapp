@@ -160,3 +160,112 @@ Stage Summary:
 - Refreshed cooler theme (slate-blue/violet) per "don't like the theme, improve coloration".
 - Cleaner PNG export (branded static header, solid bg, hidden chrome).
 - All existing functionality preserved.
+
+---
+Task ID: 5
+Agent: full-stack-developer
+Task: Rewrite `mini-services/room-service/index.ts` to add a proper real-time collaborative architecture supporting up to 10 users per room, with presence, identity, activity logs, heartbeats, idempotency (seq), and reconnection resync. Preserve all existing board/voting behavior. Single file, in-memory only, port 3003, path "/", CORS "*".
+
+Work Log:
+- Read Task 0–4 worklog + the full existing `index.ts` (500 lines: room:join, board:update/sync, presence:update with peer count only, vote:start/cast/end/cancel/sync-request, vote:state, vote:result, disconnect, host promotion via sorted socket id, Set-based members, graceful shutdown, `bun --hot`).
+- Rewrote `index.ts` end-to-end (kept the same single-file structure, sectioned with banner comments, every handler still wrapped in try/catch):
+  - **Types**: added `User { id, name, color, presence, lastSeen }`, `ActivityEntry { id, userId, userName, action, detail, ts }`. Changed `RoomState.members` from `Set<string>` to `Map<string, User>` (Map insertion order = join order). Added `activity: ActivityEntry[]` and `seq: number` to `RoomState`. Kept `VoteState` interface unchanged.
+  - **Constants**: `MAX_MEMBERS=10`, `MAX_ACTIVITY=40`, `HEARTBEAT_SWEEP_MS=15000`, `HEARTBEAT_TIMEOUT_MS=45000`, `PRESENCE_STATES`, `ALLOWED_ACTIONS`.
+  - **Helpers**: `uuid()` (crypto.randomUUID + fallback), `itemLabel()` (label/name/fallback), `getOrCreateRoom` (init vote=null, activity=[], seq=0), `peerCount`, `rememberRoom`, `forgetRoom` (host promotion now uses `members.keys().next().value` = first by insertion order, not sorted), `presenceList(room): User[]` (Array.from(members.values())), `activityPayload(room): ActivityEntry[]` (slice(-40)), `pushActivity(room, entry)` (push + cap-at-40 via shift loop), `nextSeq(room)` (++room.seq), `broadcastPresence(io, room, roomId)` (nextSeq + `io.to(roomId).emit('presence:update', { members, host, seq })`), `broadcastActivity(io, room, roomId, entry)` (pushActivity + nextSeq + `io.to(roomId).emit('activity:new', { entry, seq })`), `voteStatePayload(room, seq?)` (added `totalPeers` from members.size + `seq`).
+  - **`identity`** event (new): validates name (trim, slice 20, default "Guest") + color (regex `^#[0-9a-fA-F]{6}$`, default "#64748b"), stores on `socket.data.identity`. No broadcast. Client must emit this BEFORE room:join to set their name/color; otherwise Guest/#64748b defaults apply.
+  - **`room:join`** (rewritten): validates roomId; **10-user cap** (existing.members.size >= 10 → `room:error { event:'room:join', message:'Room is full (max 10)' }`, return); leaves previous rooms with `broadcastPresence` to each old room + scrubs any active vote from the old room; getOrCreateRoom; reads identity from `socket.data.identity`; creates `User { id, name, color, presence:'online', lastSeen:Date.now() }`; `socket.join + members.set + rememberRoom`; first joiner (or host-less room) = host; stores board if provided; emits to joiner: `room:state { roomId, isHost, peers, board, seq }`, `presence:update { members, host, seq }`, `activity:sync { entries }`, and (if active vote) `vote:state`; then `broadcastPresence` to whole room; then `broadcastActivity` "joined" (detail=name) to whole room.
+  - **`board:update`** (updated): validates roomId+board; requires existing room (no create-on-the-fly — must join first); stores board; `nextSeq`; relays to OTHERS via `socket.to(roomId).emit('board:update', { board, seq, eventId })` (eventId passed through for client idempotency). No self-echo (sender has optimistic state). Does NOT infer action types — client emits `activity:log` separately for human-readable feed entries.
+  - **`activity:log`** event (new): client-driven activity logging. Validates roomId, action ∈ ALLOWED_ACTIONS, detail (trim, slice 120). Looks up room + user (must be a member). Builds entry, `broadcastActivity` to whole room incl sender. Lets clients log "Mason moved Street Tacos to A" etc. without server parsing board diffs.
+  - **`presence:set`** event (new): validates state ∈ PRESENCE_STATES; updates `user.presence` + `user.lastSeen`; `broadcastPresence` to room. (Clients throttle on their side.)
+  - **`heartbeat`** event (new, no payload): updates `user.lastSeen = Date.now()` across all rooms the socket is in. Server-side sweep uses lastSeen to decide who to force-disconnect.
+  - **`board:sync-request`** / **`vote:sync-request`**: unchanged (reply directly to requester with current snapshot / vote state; no seq bump — hydration only).
+  - **`vote:start`**: same host-only validation + state set + `vote:state` broadcast (now with seq); ADDED `broadcastActivity` "vote_started" (detail = item label via itemLabel, fallback itemId).
+  - **`vote:cast`**: same validation (silently ignores stale/no-active votes); records/overwrites vote; `vote:state` broadcast with seq; ADDED `broadcastActivity` "voted" (detail = `${itemLabel} -> ${tierId}`).
+  - **`vote:end`**: same host-only + deterministic alphabetical tie-break; emits `vote:result { itemId, tally, winner, seq }`; clears vote; emits inactive `vote:state` with seq; ADDED `broadcastActivity` "vote_ended" (detail = `Winner: <tierId>` or `No votes`).
+  - **`vote:cancel`**: same host-only; clears vote; inactive `vote:state` with seq; ADDED `broadcastActivity` "vote_cancelled" (detail = was-itemId).
+  - **`disconnect`**: captures user BEFORE forgetRoom; forgetRoom (handles host promotion via Map insertion order); for each affected room: `broadcastPresence`, `broadcastActivity` "left" (detail = user.name), scrub the user's vote on any active vote + re-broadcast `vote:state`. Clears `socket.data.identity`.
+  - **Heartbeat sweep**: `setInterval` every 15s; iterates all rooms + members; if `Date.now() - lastSeen > 45000` and the socket is still connected, `socket.disconnect(true)` (which triggers the normal `disconnect` handler for full cleanup). Logged as `[heartbeat] force-disconnect ... (idle Nms)`.
+  - **Shutdown**: `SIGTERM`/`SIGINT` handler now also `clearInterval(heartbeatSweep)` before `io.close + httpServer.close`.
+- Preserved: `path:'/'`, CORS `*`, port 3003, ping 25s/60s, `bun --hot` compat, graceful shutdown, try/catch-on-every-handler, no custom HTTP route (engine.io owns `/`).
+
+Verification:
+- `bun build index.ts --target=bun --outfile=/tmp/rs-check.js` → `Bundled 59 modules in 14ms`, no errors.
+- Restarted: had to `kill -9` the old PID (8717, from Task 4 — `bun --hot` did NOT pick up the rewrite because the prior process was started in a previous session and the file mtime change didn't trigger a hot reload). After kill + relaunch: `lsof -i:3003` → bun PID 10368 LISTEN on `*:3003`; `service.log` shows `$ bun --hot index.ts` + `room-service on :3003` with no errors.
+- End-to-end smoke test (throwaway `socket.io-client` script in `/tmp/rs-smoke/`, since deleted) with Alice (host) + Bob (guest) + 10-client cap test + disconnect. **31 assertions, all passed**:
+  - identity → room:join: Alice isHost, peers=1, room:state has seq, activity:sync array, own "joined" activity:new with seq, presence:update with members array + host id.
+  - Bob joins: not host, peers=2, board hydrated from snapshot, activity:sync includes Alice's joined entry, sees own joined activity:new.
+  - Alice sees Bob's presence (name+color) + joined activity.
+  - `presence:set` dragging: Alice sees Bob's presence='dragging', seq incremented (3→5).
+  - `activity:log` moved: Alice sees "Street Tacos to A" with userName=Bob.
+  - `board:update` with eventId: Bob gets `{ board, seq, eventId }`, no self-echo to Alice.
+  - `vote:start`: Bob gets active vote:state (itemId, totalPeers=2, seq), vote_started activity detail=item label.
+  - `vote:cast`: Alice sees tally+voterCount, voted activity detail=`Arcade Night -> S`.
+  - `heartbeat`: Bob still connected after emitting.
+  - **10-user cap**: filled room CAP-xxxx with 10 clients, 11th client rejected with `room:error { event:'room:join', message:'Room is full (max 10)' }`.
+  - `disconnect`: Alice sees Bob "left" activity, presence drops to 1 member, Alice still host, Bob's vote scrubbed (voterCount=0).
+
+Deviations from spec (minor, all additive):
+1. **`presence:update` payload includes `host: string | null`** in addition to `{ members, seq }`. The spec literal text says `{ members: presenceList(room) }`, but the spec ALSO says "Broadcast presence:update so clients see the new host badge" — so clients need the host id. Added `host` to the payload (and to the direct emit to the joiner). This is the only way clients can render the host badge after a promotion without an extra round-trip.
+2. **`vote:result` and `vote:state` payloads include `seq`** (spec says "Include seq in those payloads where it matters (board:update relay especially)" — extended to vote events for consistency).
+3. **`activity:new` payload is `{ entry, seq }`** (spec says `{ entry }` — added seq for monotonic ordering signal).
+4. **Room-switch (leaving previous rooms in room:join) scrubs the switching user's vote** on the old room's active vote (spec says "same as before, but also broadcast presence:update" — added vote scrub for robustness, matching the disconnect behavior; otherwise a ghost vote would persist).
+5. **Room-switch does NOT push a "left" activity** (spec only specifies "left" on disconnect; preserved spec literally — the user silently disappears from the old room's presence but no activity entry is logged for room switches).
+6. **`vote:state` to joiner on hydrate** uses current `room.seq` (no increment) — same as the original hydration behavior; the spec's seq-increment rule applies to broadcasts, not direct hydration emits.
+7. **`board:update` no longer creates a room on the fly** if the room doesn't exist (original did; new version requires `room:join` first). This aligns with the identity-based join flow — clients must join before updating.
+
+Files Modified:
+- `mini-services/room-service/index.ts` (full rewrite, ~640 lines, single file).
+- `mini-services/room-service/service.log` (regenerated on restart).
+
+Stage Summary:
+- room-service on :3003 now implements the full collaborative protocol: identity → room:join (10-user cap) → presence (online/idle/dragging/voting) → activity log (joined/left/added/moved/deleted/vote_started/voted/vote_ended/vote_cancelled, last 40) → heartbeats (client 20s, server reaper 15s/45s) → seq numbers on every state-changing broadcast → idempotency via eventId passthrough on board:update → resync via board:sync-request / vote:sync-request / activity:sync on join. All pre-existing board sync + voting behavior preserved. 31/31 smoke assertions pass. Compile clean. No errors in service.log.
+- Full event list with payload shapes (for the frontend team):
+  - **Client → Server**: `identity { name?, color? }`, `room:join { roomId?, board? }`, `board:update { roomId?, board?, eventId? }`, `activity:log { roomId?, action?, detail? }`, `presence:set { roomId?, state? }`, `heartbeat`, `board:sync-request { roomId? }`, `vote:sync-request { roomId? }`, `vote:start { roomId?, itemId?, item? }`, `vote:cast { roomId?, itemId?, tierId? }`, `vote:end { roomId? }`, `vote:cancel { roomId? }`.
+  - **Server → Client**: `room:state { roomId, isHost, peers, board, seq }`, `presence:update { members: User[], host: string|null, seq }`, `activity:sync { entries: ActivityEntry[] }`, `activity:new { entry: ActivityEntry, seq }`, `board:update { board, seq, eventId? }` (relay, no self-echo), `board:sync { roomId, board|null }`, `vote:state { active, itemId, item, tally, voterCount, totalPeers, seq }`, `vote:result { itemId, tally, winner, seq }`, `room:error { event, message }`.
+  - **User**: `{ id, name, color, presence: 'online'|'idle'|'dragging'|'voting', lastSeen }`.
+  - **ActivityEntry**: `{ id, userId, userName, action, detail, ts }` where action ∈ { joined, left, added, moved, deleted, vote_started, voted, vote_ended, vote_cancelled }.
+- Frontend integration notes (for the next agent):
+  - Emit `identity { name, color }` immediately after `connect`, BEFORE `room:join`.
+  - Emit `heartbeat` every 20s to stay alive (server force-disconnects at 45s idle).
+  - Emit `presence:set { roomId, state: 'dragging' }` on DnD drag start, `state: 'online'` on drag end (throttle).
+  - Emit `activity:log { roomId, action: 'moved', detail: '<item> to <tier>' }` right after each `board:update` for user-visible actions (add/move/delete). The server does NOT infer action types from board diffs.
+  - Track `seq` from every server broadcast for monotonic reconciliation; on reconnect/late-join, use `activity:sync` + `board:sync-request` + `vote:sync-request` to rehydrate.
+  - Skip applying a `board:update` relay if `eventId` matches one you just sent (avoid double-apply of your own optimistic state echoed back — though currently the server does NOT self-echo, this is a safety net).
+
+---
+Task ID: 6
+Agent: orchestrator (main)
+Task: Voting system + websocket architecture + design overhaul + hosting guide.
+
+Work Log:
+- Delegated room-service rewrite (Task 5) to subagent: added identity, presence (online/idle/dragging/voting), activity log (40-entry ring buffer), heartbeats (20s client / 45s server sweep), seq numbers, eventId idempotency, 10-user cap, reconnect/resync, vote:sync-request. 31/31 tests passed.
+- Built user identity system (src/lib/identity.ts): generates name+color, stored in localStorage, editable via ProfileEditor popover.
+- Built presence types + activity formatting (src/lib/presence.ts): RoomUser, ActivityEntry, ACTIVITY_META with readable labels.
+- Rewrote MultiplayerProvider (use-multiplayer.tsx → .tsx): shared context, identity emission, presence:update with host detection (sock.id comparison), activity:sync/new, heartbeats, debounced board broadcast (120ms), reconnect handler, throttled presence:set (400ms). Exposes setPresence, logActivity, user, updateUser.
+- Built avatars.tsx: Avatar (colored initials + presence ring + status dot), PresenceAvatars (stacked overflow + popover member list with host badge).
+- Built activity-feed.tsx: live scrolling feed with colored action dots, time-ago, empty state.
+- Redesigned globals.css: "Afterdark" theme — deep indigo (oklch 280), violet/magenta brand gradient, gold accent for CTAs, bold playful buttons (rf-btn-primary, rf-btn-accent with lift+glow on hover), rf-glow animation on logo. VLM: 9/10 design, 8/10 fun/social.
+- Updated all buttons to use bold gradient styles (Start a live room, Vote on next item, End & place, Export PNG, Customize).
+- Wired presence into drag (dragging→online) and voting (voting→online). Wired activity logging for moves ("Mason moved Street Tacos to A"), adds ("Emma added Karaoke"), votes ("Nate voted S for Arcade Night"), vote lifecycle.
+- Fixed critical bug: useMultiplayer not imported in control-panel.tsx (caused "Application error"). Fixed isHost logic in presence:update (was comparing host socketId with room code). Split RankForgeApp into RankForgeApp+RankForgeInner to use useMultiplayer inside the provider.
+- Removed duplicate vote activity (server was pushing vote_started/voted/ended/cancelled AND client was too). Kept client version (more readable: "S for Arcade Night" vs server's tierId). Moved vote_ended logging to onResult handler (has actual winner).
+- Updated socket.ts to support NEXT_PUBLIC_ROOM_SERVICE_URL env var for production hosting.
+- Wrote HOSTING.md: step-by-step Vercel + Render/Railway deployment guide.
+
+Verification (agent-browser 2-client via Caddy :81):
+- Presence: P1 created room SNJTC → "1 ONLINE", host badge, avatar. P2 joined → both show "2 ONLINE", P2 as "GUEST". Avatars with colored initials (R8, PI).
+- Activity feed: "Umber 29 joined the room", "Frost 2 joined the room", "Umber 29 started a vote on Arcade Night", "Umber 29 voted S for Arcade Night", "Frost 2 voted A for Arcade Night", "Umber 29 ended the vote — Arcade Night → S" — NO duplicates, all readable.
+- Voting: overlay popped on both clients simultaneously. Both voted (2 of 2). Host ended → overlay closed on both, item auto-placed in winning tier, synced to both.
+- Design VLM: desktop 9/10, mobile 8/10. "Fun, modern, not generic SaaS."
+- Lint clean. Both services running (:3000, :3003).
+
+Stage Summary:
+- NEW websocket architecture: event-based with identity, presence (4 states), activity log, heartbeats, seq/idempotency, 10-user cap, reconnect/resync.
+- NEW presence: colored avatars with initials + presence rings (online/idle/dragging/voting) in header + sidebar popover.
+- NEW activity feed: "Mason moved X to A", "Nate voted S for Y", "Emma added Z" — live, readable, no dups.
+- REDESIGNED: "Afterdark" indigo theme, bold gradient buttons, playful party vibe.
+- Voting is front-and-center: one-tap "Vote on next item", overlay pops for everyone, easy tier tap voting.
+- Speed: debounced board broadcast (120ms), throttled presence (400ms), optimistic updates.
+- Anyone can add items/upload images. Host-only vote start/end enforced on server.
+- Hosting guide written (HOSTING.md) + socket.ts updated for production env var.
+- All existing functionality preserved.

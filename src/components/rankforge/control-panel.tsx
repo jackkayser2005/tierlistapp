@@ -41,9 +41,11 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useRankForge, buildExport } from "@/lib/store";
 import { normalizeBoard, type RankForgeBoard } from "@/lib/tierlist";
+import { useMultiplayer } from "@/hooks/use-multiplayer";
 import { ColorPicker } from "./color-picker";
 import { MultiplayerPanel } from "./multiplayer-panel";
 import { VotingControls } from "./voting-controls";
+import { ActivityFeed } from "./activity-feed";
 import { downscaleImage, readFileAsDataURL, slugify } from "@/lib/image";
 import {
   Popover,
@@ -83,6 +85,7 @@ function SectionShell({
 
 function AddItemSection() {
   const addItem = useRankForge((s) => s.addItem);
+  const { logActivity, status } = useMultiplayer();
   const fileRef = React.useRef<HTMLInputElement>(null);
 
   const [text, setText] = React.useState("");
@@ -90,11 +93,16 @@ function AddItemSection() {
   const [imgUrl, setImgUrl] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
+  const logAdd = (label: string) => {
+    if (status === "connected") logActivity("added", label);
+  };
+
   const addText = () => {
     const v = text.trim();
     if (!v) return;
     addItem({ type: "text", label: v });
     setText("");
+    logAdd(v);
     toast.success("Card added to Unranked");
   };
 
@@ -113,6 +121,7 @@ function AddItemSection() {
       addItem({ type: "image", label, imageUrl: url });
       setImgUrl("");
       setImgLabel("");
+      logAdd(label);
       toast.success("Image card added to Unranked");
     } catch {
       toast.error("That image URL couldn't be loaded");
@@ -131,6 +140,7 @@ function AddItemSection() {
         const dataUrl = await downscaleImage(raw, 480, 0.85);
         const label = file.name.replace(/\.[^.]+$/, "").slice(0, 40) || "Image";
         addItem({ type: "image", label, imageUrl: dataUrl });
+        logAdd(label);
       }
       toast.success(
         `${files.length} image${files.length === 1 ? "" : "s"} added to Unranked`
@@ -469,7 +479,7 @@ function ShareSection({ onExportPng, exporting }: { onExportPng: () => void; exp
       <Button
         onClick={onExportPng}
         disabled={exporting}
-        className="w-full rf-brand text-white hover:opacity-90"
+        className="rf-btn-primary w-full"
       >
         <ImageIcon className="size-4" />
         {exporting ? "Rendering…" : "Export as PNG"}
@@ -521,6 +531,7 @@ export function ControlPanelContent({
     <div className={cn("space-y-7", className)}>
       <MultiplayerPanel />
       <VotingControls />
+      <ActivityFeed />
       <AddItemSection />
       <TiersSection />
       <BoardSection />

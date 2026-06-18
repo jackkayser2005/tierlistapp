@@ -1,18 +1,118 @@
 "use client";
 
 import * as React from "react";
-import { Users, Copy, LogOut, Link2, Radio, Wifi, WifiOff } from "lucide-react";
+import {
+  Radio,
+  LogOut,
+  Link2,
+  Wifi,
+  Users,
+  Pencil,
+  Check,
+  Shuffle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { useMultiplayer } from "@/hooks/use-multiplayer";
+import { PresenceAvatars } from "./avatars";
+import { toast } from "sonner";
 
-function PresenceBadge({ peers }: { peers: number }) {
+const AVATAR_COLORS = [
+  "#f43f5e", "#fb7185", "#f97316", "#f59e0b", "#eab308", "#84cc16",
+  "#22c55e", "#10b981", "#14b8a6", "#06b6d4", "#0ea5e9", "#3b82f6",
+  "#6366f1", "#8b5cf6", "#a855f7", "#d946ef", "#ec4899",
+];
+
+function ProfileEditor() {
+  const { user, updateUser } = useMultiplayer();
+  const [open, setOpen] = React.useState(false);
+  const [name, setName] = React.useState(user.name);
+  const [color, setColor] = React.useState(user.color);
+
+  React.useEffect(() => {
+    setName(user.name);
+    setColor(user.color);
+  }, [user.name, user.color]);
+
+  const save = () => {
+    updateUser({ name: name.trim() || "Guest", color });
+    setOpen(false);
+  };
+
+  const shuffle = () => {
+    const c = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+    setColor(c);
+  };
+
+  const initials = user.name.trim().slice(0, 2).toUpperCase() || "G";
+
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300">
-      <span className="rf-live-dot size-1.5 rounded-full bg-emerald-400" />
-      {peers} online
-    </span>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] py-1 pl-1 pr-3 transition hover:bg-white/[0.08]">
+          <span
+            className="grid size-7 place-items-center rounded-full text-[11px] font-bold text-white"
+            style={{ backgroundColor: user.color }}
+          >
+            {initials}
+          </span>
+          <span className="max-w-[90px] truncate text-xs font-semibold">
+            {user.name}
+          </span>
+          <Pencil className="size-3 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-3" align="start">
+        <div className="space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Your profile
+          </p>
+          <Input
+            value={name}
+            maxLength={20}
+            placeholder="Display name"
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") save();
+            }}
+          />
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-[11px] text-muted-foreground">Color</span>
+              <button
+                onClick={shuffle}
+                className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+              >
+                <Shuffle className="size-3" /> Random
+              </button>
+            </div>
+            <div className="grid grid-cols-9 gap-1.5">
+              {AVATAR_COLORS.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setColor(c)}
+                  className={cn(
+                    "size-5 rounded-md transition hover:scale-110",
+                    color.toLowerCase() === c.toLowerCase() &&
+                      "ring-2 ring-white ring-offset-2 ring-offset-background"
+                  )}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+            </div>
+          </div>
+          <Button size="sm" className="w-full" onClick={save}>
+            <Check className="size-3.5" /> Save
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -22,7 +122,8 @@ export function MultiplayerPanel() {
     roomId,
     isHost,
     peers,
-    hydrated,
+    members,
+    hostId,
     createRoom,
     joinRoom,
     leaveRoom,
@@ -31,22 +132,18 @@ export function MultiplayerPanel() {
 
   const [joinCode, setJoinCode] = React.useState("");
 
-  // Disconnected state — show create / join controls.
   if (status === "disconnected") {
     return (
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <span className="rf-section-label">collab</span>
+          <span className="rf-section-label">live room</span>
         </div>
         <div className="rf-inset rounded-xl p-3">
           <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-            Go live and rank together in real time. Share a code with a friend
-            and edit the same board.
+            Start a room, share the code, and rank together in real time. Up to
+            10 friends can join.
           </p>
-          <Button
-            onClick={createRoom}
-            className="w-full rf-brand text-white hover:opacity-90"
-          >
+          <Button onClick={createRoom} className="rf-btn-primary w-full">
             <Radio className="size-4" /> Start a live room
           </Button>
           <div className="my-3 flex items-center gap-2">
@@ -82,17 +179,15 @@ export function MultiplayerPanel() {
             </Button>
           </div>
         </div>
+        <ProfileEditor />
       </div>
     );
   }
 
-  // Connecting state.
   if (status === "connecting") {
     return (
       <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <span className="rf-section-label">collab</span>
-        </div>
+        <span className="rf-section-label">live room</span>
         <div className="rf-inset flex items-center gap-2 rounded-xl p-3 text-sm text-muted-foreground">
           <Wifi className="size-4 animate-pulse" />
           Connecting…
@@ -101,26 +196,30 @@ export function MultiplayerPanel() {
     );
   }
 
-  // Connected state — show room code, presence, share, leave.
+  // Connected
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <span className="rf-section-label">collab</span>
-        <PresenceBadge peers={peers} />
+        <span className="rf-section-label">live room</span>
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">
+          <span className="rf-live-dot size-1.5 rounded-full bg-emerald-400" />
+          {peers} online
+        </span>
       </div>
+
       <div className="rf-inset rounded-xl p-3">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Room code
             </p>
-            <p className="font-mono text-lg font-bold tracking-[0.2em] text-foreground">
+            <p className="font-mono text-xl font-black tracking-[0.18em] text-foreground">
               {roomId}
             </p>
           </div>
           <span
             className={cn(
-              "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+              "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
               isHost
                 ? "bg-amber-400/15 text-amber-300"
                 : "bg-sky-400/15 text-sky-300"
@@ -129,6 +228,12 @@ export function MultiplayerPanel() {
             {isHost ? "host" : "guest"}
           </span>
         </div>
+
+        {/* Presence avatars */}
+        <div className="mt-3 flex items-center gap-2">
+          <PresenceAvatars members={members} hostId={hostId} />
+        </div>
+
         <div className="mt-3 grid grid-cols-2 gap-2">
           <Button variant="outline" size="sm" onClick={copyShareLink}>
             <Link2 className="size-3.5" /> Copy link
@@ -142,25 +247,20 @@ export function MultiplayerPanel() {
             <LogOut className="size-3.5" /> Leave
           </Button>
         </div>
-        <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground/80">
-          {peers <= 1
-            ? "Waiting for a friend to join with your code…"
-            : "Live — every change syncs instantly."}
-        </p>
       </div>
+
+      <ProfileEditor />
     </div>
   );
 }
 
 /** Compact presence chip for the header. */
 export function PresenceChip() {
-  const { status, peers, roomId } = useMultiplayer();
-  if (status !== "connected" || !roomId) return null;
+  const { status, members, peers } = useMultiplayer();
+  if (status !== "connected") return null;
   return (
-    <span className="hidden items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300 sm:inline-flex">
-      <span className="rf-live-dot size-1.5 rounded-full bg-emerald-400" />
-      <Users className="size-3" />
-      {peers}
-    </span>
+    <div className="hidden items-center sm:flex">
+      <PresenceAvatars members={members} hostId={null} max={4} />
+    </div>
   );
 }

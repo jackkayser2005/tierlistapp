@@ -22,11 +22,14 @@ import { Input } from "@/components/ui/input";
 import { useRankForge } from "@/lib/store";
 import { UNRANKED_ID } from "@/lib/tierlist";
 import { usePngExport } from "@/hooks/use-png-export";
-import { MultiplayerProvider } from "@/hooks/use-multiplayer";
+import { MultiplayerProvider, useMultiplayer } from "@/hooks/use-multiplayer";
 import { Header } from "./header";
 import { TierBoard } from "./tier-board";
 import { UnrankedPool } from "./unranked-pool";
 import { ControlPanelContent } from "./control-panel";
+import { MultiplayerPanel } from "./multiplayer-panel";
+import { VotingControls } from "./voting-controls";
+import { ActivityFeed } from "./activity-feed";
 import { DragOverlayCard } from "./item-card";
 import { VotingModeProvider } from "./voting-context";
 import { VotingOverlay } from "./voting-overlay";
@@ -121,6 +124,16 @@ export function RankForgeApp() {
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => setMounted(true), []);
 
+  if (!mounted) return <LoadingShell />;
+
+  return (
+    <MultiplayerProvider>
+      <RankForgeInner />
+    </MultiplayerProvider>
+  );
+}
+
+function RankForgeInner() {
   const tiers = useRankForge((s) => s.tiers);
   const items = useRankForge((s) => s.items);
   const moveItem = useRankForge((s) => s.moveItem);
@@ -129,6 +142,8 @@ export function RankForgeApp() {
   const title = useRankForge((s) => s.title);
 
   const { exportRef, exporting, exportPng } = usePngExport();
+  const { setPresence, logActivity, status } = useMultiplayer();
+  const dragStartContainerRef = React.useRef<string | null>(null);
 
   const [activeId, setActiveId] = React.useState<string | null>(null);
   const [dragOverContainer, setDragOverContainer] = React.useState<string | null>(null);
@@ -154,7 +169,10 @@ export function RankForgeApp() {
 
   const onDragStart = (e: DragStartEvent) => {
     setActiveId(String(e.active.id));
-    setDragOverContainer(findContainer(String(e.active.id)));
+    const c = findContainer(String(e.active.id));
+    dragStartContainerRef.current = c;
+    setDragOverContainer(c);
+    if (status === "connected") setPresence("dragging");
   };
 
   const onDragOver = (e: DragOverEvent) => {
@@ -179,10 +197,14 @@ export function RankForgeApp() {
     const { active, over } = e;
     setActiveId(null);
     setDragOverContainer(null);
-    if (!over) return;
+    if (status === "connected") setPresence("online");
 
     const activeIdStr = String(active.id);
     const overId = String(over.id);
+    const fromContainer = dragStartContainerRef.current;
+    dragStartContainerRef.current = null;
+
+    if (!over) return;
     if (activeIdStr === overId) return;
 
     const activeContainer = findContainer(activeIdStr);
@@ -192,23 +214,34 @@ export function RankForgeApp() {
     const isOverItem = over.data.current?.type === "item";
     const toIndex = isOverItem ? indexOfItem(overContainer, overId) : -1;
     moveItem(activeIdStr, activeContainer, overContainer, toIndex);
+
+    // Log the move activity (only if it crossed containers or visibly moved).
+    if (status === "connected" && activeContainer !== overContainer) {
+      const item = items[activeIdStr];
+      if (item) {
+        const toName =
+          overContainer === UNRANKED_ID
+            ? "Unranked"
+            : tiers.find((t) => t.id === overContainer)?.name ?? "a tier";
+        logActivity("moved", `${item.label} to ${toName}`);
+      }
+    }
   };
 
   const onDragCancel = () => {
     setActiveId(null);
     setDragOverContainer(null);
+    dragStartContainerRef.current = null;
+    if (status === "connected") setPresence("online");
   };
 
   const activeItem = activeId ? items[activeId] : null;
 
-  if (!mounted) return <LoadingShell />;
-
   const handleExport = () => exportPng({ title });
 
   return (
-    <MultiplayerProvider>
-      <VotingModeProvider>
-        <div className="rf-app-bg flex min-h-screen flex-col">
+    <VotingModeProvider>
+      <div className="rf-app-bg flex min-h-screen flex-col">
           <Header onExportPng={handleExport} exporting={exporting} />
 
           <DndContext
@@ -222,7 +255,6 @@ export function RankForgeApp() {
           >
             <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
               <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-                {/* Board + unranked — wrapped for PNG capture */}
                 <div ref={exportRef} className="rf-export-shell rounded-2xl">
                   <ExportHeader />
                   <BoardHeader />
@@ -232,7 +264,6 @@ export function RankForgeApp() {
                   </div>
                 </div>
 
-                {/* Desktop sidebar */}
                 <aside className="hidden lg:block">
                   <div className="rf-panel rf-scroll sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto rounded-2xl p-5">
                     <ControlPanelContent
@@ -261,7 +292,7 @@ export function RankForgeApp() {
               <p className="flex items-center gap-1.5">
                 <Flame className="size-3.5 text-violet-300" />
                 <span className="font-semibold text-foreground/80">RankForge</span>
-                <span className="text-muted-foreground/60">— local &amp; live PoC</span>
+                <span className="text-muted-foreground/60">— live &amp; local</span>
               </p>
               <p className="flex items-center gap-1.5">
                 Auto-saves to your browser
@@ -269,8 +300,7 @@ export function RankForgeApp() {
               </p>
             </div>
           </footer>
-        </div>
-      </VotingModeProvider>
-    </MultiplayerProvider>
+      </div>
+    </VotingModeProvider>
   );
 }

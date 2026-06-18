@@ -27,15 +27,15 @@ export function Header({ onExportPng, exporting }: HeaderProps) {
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
         {/* Brand */}
         <div className="flex items-center gap-2.5">
-          <div className="rf-brand grid size-8 place-items-center rounded-xl shadow-lg shadow-orange-500/20">
+          <div className="rf-brand rf-glow grid size-8 place-items-center rounded-xl">
             <Flame className="size-4.5 text-white" />
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-[15px] font-bold tracking-tight">
+            <span className="text-[15px] font-extrabold tracking-tight">
               <span className="rf-brand-text">RankForge</span>
             </span>
-            <span className="hidden rounded-full border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground sm:inline">
-              PoC
+            <span className="hidden rounded-full border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground sm:inline">
+              beta
             </span>
           </div>
         </div>
@@ -56,7 +56,7 @@ export function Header({ onExportPng, exporting }: HeaderProps) {
           {/* Mobile panel trigger */}
           <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
             <SheetTrigger asChild>
-              <Button className="lg:hidden" size="sm">
+              <Button className="rf-btn-primary lg:hidden" size="sm">
                 <SlidersHorizontal className="size-4" /> Customize
               </Button>
             </SheetTrigger>
@@ -66,7 +66,7 @@ export function Header({ onExportPng, exporting }: HeaderProps) {
             >
               <SheetHeader className="border-b border-white/[0.06] px-5 py-4">
                 <SheetTitle className="flex items-center gap-2">
-                  <SlidersHorizontal className="size-4 text-amber-300" />
+                  <SlidersHorizontal className="size-4 text-violet-300" />
                   Customize
                 </SheetTitle>
               </SheetHeader>
