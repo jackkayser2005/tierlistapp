@@ -22,6 +22,14 @@ import { Server, type Socket } from 'socket.io'
 /** Minimal shape of a board payload — we treat it as an opaque JSON object. */
 type Board = Record<string, unknown> | null
 
+/** Active vote on a single item. `votes` maps voter socket id -> chosen tierId. */
+interface VoteState {
+  itemId: string
+  item: Record<string, unknown>
+  votes: Map<string, string> // socketId -> tierId
+  startedBy: string // socket id of the host who started it
+}
+
 interface RoomState {
   /** socket ids currently in the room */
   members: Set<string>
@@ -29,6 +37,8 @@ interface RoomState {
   host: string | null
   /** latest board snapshot so late joiners can hydrate immediately */
   board: Board
+  /** active vote, if any; null when no vote is in progress */
+  vote: VoteState | null
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +62,7 @@ const socketRooms = new Map<string, Set<string>>()
 function getOrCreateRoom(roomId: string): RoomState {
   let room = rooms.get(roomId)
   if (!room) {
-    room = { members: new Set<string>(), host: null, board: null }
+    room = { members: new Set<string>(), host: null, board: null, vote: null }
     rooms.set(roomId, room)
   }
   return room
@@ -89,6 +99,34 @@ function forgetRoom(socketId: string, roomId: string): void {
     // state. The room Map entry stays around; that's fine for a mini-service.
   }
   socketRooms.get(socketId)?.delete(roomId)
+}
+
+/** Build the vote:state payload to broadcast. tally is { tierId: count }. */
+function voteStatePayload(room: RoomState): {
+  active: boolean
+  itemId: string | null
+  item: Record<string, unknown> | null
+  tally: Record<string, number>
+  voterCount: number
+  totalPeers: number
+} {
+  const vote = room.vote
+  const tally: Record<string, number> = {}
+  let voterCount = 0
+  if (vote) {
+    for (const tierId of vote.votes.values()) {
+      tally[tierId] = (tally[tierId] ?? 0) + 1
+      voterCount++
+    }
+  }
+  return {
+    active: !!vote,
+    itemId: vote?.itemId ?? null,
+    item: vote?.item ?? null,
+    tally,
+    voterCount,
+    totalPeers: room.members.size,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +212,12 @@ io.on('connection', (socket: Socket) => {
         board: room.board,
       })
 
+      // If a vote is currently active, send its state to the joiner so they
+      // see the voting overlay immediately.
+      if (room.vote) {
+        socket.emit('vote:state', voteStatePayload(room))
+      }
+
       // Tell everyone (including sender) the new peer count.
       io.to(roomId).emit('presence:update', {
         roomId,
@@ -232,6 +276,171 @@ io.on('connection', (socket: Socket) => {
     }
   })
 
+  // ----- vote:sync-request ----------------------------------------------
+  // A freshly-joined (or reconnecting) client asks for the current vote state
+  // so it can show the voting overlay if a vote is in progress. We reply
+  // directly to the requester.
+  socket.on('vote:sync-request', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId : ''
+      const room = roomId ? rooms.get(roomId) : undefined
+      socket.emit('vote:state', room ? voteStatePayload(room) : { active: false, itemId: null, item: null, tally: {}, voterCount: 0, totalPeers: 0 })
+    } catch (err) {
+      console.error(`[vote:sync-request] error from ${socket.id}:`, err)
+    }
+  })
+
+  // ----- vote:start ------------------------------------------------------
+  // Host kicks off a vote on a specific item. The item "pops up" for everyone
+  // in the room; each peer then casts one vote for a tier via `vote:cast`.
+  socket.on('vote:start', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as {
+        roomId?: string
+        itemId?: string
+        item?: Record<string, unknown>
+      }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      const itemId = typeof data.itemId === 'string' ? data.itemId.trim() : ''
+      if (!roomId || !itemId || typeof data.item !== 'object' || data.item === null || Array.isArray(data.item)) {
+        socket.emit('room:error', {
+          event: 'vote:start',
+          message: 'roomId (string), itemId (string) and item (object) are required',
+        })
+        return
+      }
+
+      const room = rooms.get(roomId)
+      if (!room) {
+        socket.emit('room:error', { event: 'vote:start', message: 'room not found' })
+        return
+      }
+      if (room.host !== socket.id) {
+        socket.emit('room:error', { event: 'vote:start', message: 'only host can start a vote' })
+        return
+      }
+
+      room.vote = {
+        itemId,
+        item: data.item,
+        votes: new Map<string, string>(),
+        startedBy: socket.id,
+      }
+
+      io.to(roomId).emit('vote:state', voteStatePayload(room))
+      console.log(`[vote:start] ${socket.id} -> ${roomId} item=${itemId}`)
+    } catch (err) {
+      console.error(`[vote:start] error from ${socket.id}:`, err)
+      socket.emit('room:error', { event: 'vote:start', message: 'internal error' })
+    }
+  })
+
+  // ----- vote:cast --------------------------------------------------------
+  // A peer casts (or re-casts) their vote for a tier on the active item.
+  // Stale votes (wrong itemId / no active vote) are ignored silently.
+  socket.on('vote:cast', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as {
+        roomId?: string
+        itemId?: string
+        tierId?: string
+      }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      const itemId = typeof data.itemId === 'string' ? data.itemId.trim() : ''
+      const tierId = typeof data.tierId === 'string' ? data.tierId.trim() : ''
+      if (!roomId || !itemId || !tierId) return
+
+      const room = rooms.get(roomId)
+      if (!room || !room.vote) return
+      if (room.vote.itemId !== itemId) return // stale vote
+
+      room.vote.votes.set(socket.id, tierId)
+      io.to(roomId).emit('vote:state', voteStatePayload(room))
+      console.log(`[vote:cast] ${socket.id} voted ${tierId} in ${roomId}`)
+    } catch (err) {
+      console.error(`[vote:cast] error from ${socket.id}:`, err)
+    }
+  })
+
+  // ----- vote:end ---------------------------------------------------------
+  // Host ends the active vote. Winner = tierId with the highest count; ties
+  // broken by ascending alphabetical tierId (deterministic). If no votes were
+  // cast, winner = null. Emits `vote:result` then a final inactive `vote:state`
+  // so clients close the overlay.
+  socket.on('vote:end', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      if (!roomId) return
+
+      const room = rooms.get(roomId)
+      if (!room || !room.vote) return
+
+      if (room.host !== socket.id) {
+        socket.emit('room:error', { event: 'vote:end', message: 'only host can end a vote' })
+        return
+      }
+
+      const vote = room.vote
+      const tally: Record<string, number> = {}
+      let winner: string | null = null
+      let bestCount = -1
+      // Iterating tierIds in sorted order gives deterministic tie-breaking:
+      // the alphabetically-first tierId wins on a tie (strict > keeps the
+      // earliest-seen leading candidate).
+      const sortedTierIds = Array.from(vote.votes.values()).sort()
+      for (const tierId of sortedTierIds) {
+        const count = (tally[tierId] ?? 0) + 1
+        tally[tierId] = count
+        if (count > bestCount) {
+          bestCount = count
+          winner = tierId
+        }
+      }
+      if (vote.votes.size === 0) winner = null
+
+      io.to(roomId).emit('vote:result', {
+        itemId: vote.itemId,
+        tally,
+        winner,
+      })
+
+      room.vote = null
+      io.to(roomId).emit('vote:state', voteStatePayload(room))
+      console.log(`[vote:end] ${socket.id} -> ${roomId} winner=${winner}`)
+    } catch (err) {
+      console.error(`[vote:end] error from ${socket.id}:`, err)
+      socket.emit('room:error', { event: 'vote:end', message: 'internal error' })
+    }
+  })
+
+  // ----- vote:cancel ------------------------------------------------------
+  // Host cancels the active vote without announcing a winner. Just clears
+  // state and broadcasts an inactive `vote:state`.
+  socket.on('vote:cancel', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      if (!roomId) return
+
+      const room = rooms.get(roomId)
+      if (!room) return
+
+      if (room.host !== socket.id) {
+        socket.emit('room:error', { event: 'vote:cancel', message: 'only host can cancel a vote' })
+        return
+      }
+
+      room.vote = null
+      io.to(roomId).emit('vote:state', voteStatePayload(room))
+      console.log(`[vote:cancel] ${socket.id} -> ${roomId}`)
+    } catch (err) {
+      console.error(`[vote:cancel] error from ${socket.id}:`, err)
+      socket.emit('room:error', { event: 'vote:cancel', message: 'internal error' })
+    }
+  })
+
   // ----- disconnect ------------------------------------------------------
   socket.on('disconnect', (reason: string) => {
     try {
@@ -245,6 +454,13 @@ io.on('connection', (socket: Socket) => {
             roomId,
             peers: peerCount(roomId),
           })
+          // If the disconnected socket had cast a vote on the active vote,
+          // drop it and re-broadcast the tally so the count is live.
+          const room = rooms.get(roomId)
+          if (room && room.vote && room.vote.votes.has(socket.id)) {
+            room.vote.votes.delete(socket.id)
+            io.to(roomId).emit('vote:state', voteStatePayload(room))
+          }
         }
         socketRooms.delete(socket.id)
       }

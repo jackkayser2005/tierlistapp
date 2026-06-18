@@ -22,11 +22,14 @@ import { Input } from "@/components/ui/input";
 import { useRankForge } from "@/lib/store";
 import { UNRANKED_ID } from "@/lib/tierlist";
 import { usePngExport } from "@/hooks/use-png-export";
+import { MultiplayerProvider } from "@/hooks/use-multiplayer";
 import { Header } from "./header";
 import { TierBoard } from "./tier-board";
 import { UnrankedPool } from "./unranked-pool";
 import { ControlPanelContent } from "./control-panel";
 import { DragOverlayCard } from "./item-card";
+import { VotingModeProvider } from "./voting-context";
+import { VotingOverlay } from "./voting-overlay";
 
 /**
  * Custom collision detection: prefer pointer-within, fall back to rect
@@ -54,6 +57,7 @@ function LoadingShell() {
   );
 }
 
+/** Editable header shown in the live app (hidden during PNG export). */
 function BoardHeader() {
   const title = useRankForge((s) => s.title);
   const description = useRankForge((s) => s.description);
@@ -61,7 +65,7 @@ function BoardHeader() {
   const itemCount = useRankForge((s) => Object.keys(s.items).length);
 
   return (
-    <div className="mb-5 space-y-1.5">
+    <div className="rf-no-export mb-5 space-y-1.5">
       <div className="flex items-center gap-2">
         <Input
           value={title}
@@ -81,6 +85,34 @@ function BoardHeader() {
         onChange={(e) => setMeta({ description: e.target.value })}
         className="border-0 bg-transparent px-0 text-sm text-muted-foreground shadow-none focus-visible:ring-0"
       />
+    </div>
+  );
+}
+
+/** Static branded header rendered only in the PNG export. */
+function ExportHeader() {
+  const title = useRankForge((s) => s.title);
+  const description = useRankForge((s) => s.description);
+  const itemCount = useRankForge((s) => Object.keys(s.items).length);
+  return (
+    <div className="rf-export-only mb-5">
+      <div className="flex items-center gap-2.5">
+        <div className="rf-brand grid size-8 place-items-center rounded-lg">
+          <Flame className="size-4 text-white" />
+        </div>
+        <span className="text-sm font-black tracking-tight rf-brand-text">
+          RankForge
+        </span>
+      </div>
+      <h1 className="mt-2 text-2xl font-black tracking-tight text-foreground">
+        {title || "Untitled tier list"}
+      </h1>
+      {description ? (
+        <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
+      ) : null}
+      <p className="mt-1 text-[11px] text-muted-foreground/70">
+        {itemCount} items · made with RankForge
+      </p>
     </div>
   );
 }
@@ -174,64 +206,71 @@ export function RankForgeApp() {
   const handleExport = () => exportPng({ title });
 
   return (
-    <div className="rf-app-bg flex min-h-screen flex-col">
-      <Header onExportPng={handleExport} exporting={exporting} />
+    <MultiplayerProvider>
+      <VotingModeProvider>
+        <div className="rf-app-bg flex min-h-screen flex-col">
+          <Header onExportPng={handleExport} exporting={exporting} />
 
-      <DndContext
-        sensors={sensors}
-        collisionDetection={collisionDetection}
-        measuring={{ droppable: { strategy: "Always" } }}
-        onDragStart={onDragStart}
-        onDragOver={onDragOver}
-        onDragEnd={onDragEnd}
-        onDragCancel={onDragCancel}
-      >
-        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-            {/* Board + unranked — wrapped for PNG capture */}
-            <div ref={exportRef} className="rf-export-bg rounded-2xl">
-              <BoardHeader />
-              <div className="flex flex-col gap-4">
-                <TierBoard dragOverContainer={dragOverContainer} />
-                <UnrankedPool dragOverContainer={dragOverContainer} />
+          <DndContext
+            sensors={sensors}
+            collisionDetection={collisionDetection}
+            measuring={{ droppable: { strategy: "Always" } }}
+            onDragStart={onDragStart}
+            onDragOver={onDragOver}
+            onDragEnd={onDragEnd}
+            onDragCancel={onDragCancel}
+          >
+            <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+                {/* Board + unranked — wrapped for PNG capture */}
+                <div ref={exportRef} className="rf-export-shell rounded-2xl">
+                  <ExportHeader />
+                  <BoardHeader />
+                  <div className="flex flex-col gap-4">
+                    <TierBoard dragOverContainer={dragOverContainer} />
+                    <UnrankedPool dragOverContainer={dragOverContainer} />
+                  </div>
+                </div>
+
+                {/* Desktop sidebar */}
+                <aside className="hidden lg:block">
+                  <div className="rf-panel rf-scroll sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto rounded-2xl p-5">
+                    <ControlPanelContent
+                      onExportPng={handleExport}
+                      exporting={exporting}
+                    />
+                  </div>
+                </aside>
               </div>
+            </main>
+
+            <DragOverlay
+              dropAnimation={{
+                duration: 180,
+                easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
+              }}
+            >
+              {activeItem ? <DragOverlayCard item={activeItem} /> : null}
+            </DragOverlay>
+          </DndContext>
+
+          <VotingOverlay />
+
+          <footer className="mt-auto border-t border-white/[0.06] bg-background/40 backdrop-blur">
+            <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-5 text-xs text-muted-foreground sm:flex-row sm:px-6">
+              <p className="flex items-center gap-1.5">
+                <Flame className="size-3.5 text-violet-300" />
+                <span className="font-semibold text-foreground/80">RankForge</span>
+                <span className="text-muted-foreground/60">— local &amp; live PoC</span>
+              </p>
+              <p className="flex items-center gap-1.5">
+                Auto-saves to your browser
+                <Heart className="size-3 text-rose-400" />
+              </p>
             </div>
-
-            {/* Desktop sidebar */}
-            <aside className="hidden lg:block">
-              <div className="rf-panel rf-scroll sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto rounded-2xl p-5">
-                <ControlPanelContent
-                  onExportPng={handleExport}
-                  exporting={exporting}
-                />
-              </div>
-            </aside>
-          </div>
-        </main>
-
-        <DragOverlay
-          dropAnimation={{
-            duration: 180,
-            easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
-          }}
-        >
-          {activeItem ? <DragOverlayCard item={activeItem} /> : null}
-        </DragOverlay>
-      </DndContext>
-
-      <footer className="mt-auto border-t border-white/[0.06] bg-background/40 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-5 text-xs text-muted-foreground sm:flex-row sm:px-6">
-          <p className="flex items-center gap-1.5">
-            <Flame className="size-3.5 text-amber-300" />
-            <span className="font-semibold text-foreground/80">RankForge</span>
-            <span className="text-muted-foreground/60">— local &amp; live PoC</span>
-          </p>
-          <p className="flex items-center gap-1.5">
-            Auto-saves to your browser
-            <Heart className="size-3 text-rose-400" />
-          </p>
+          </footer>
         </div>
-      </footer>
-    </div>
+      </VotingModeProvider>
+    </MultiplayerProvider>
   );
 }

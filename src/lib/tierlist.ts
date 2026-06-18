@@ -40,16 +40,15 @@ export interface RankForgeExport {
   board: RankForgeBoard;
 }
 
-/** Curated palette offered in the tier color picker — refined, slightly muted. */
+/** Curated palette offered in the tier color picker — refined, harmonious. */
 export const TIER_COLOR_PRESETS: string[] = [
-  "#be123c", // crimson
+  "#9f1239", // crimson
   "#dc2626", // red
   "#ea580c", // orange
   "#d97706", // amber
   "#ca8a04", // gold
   "#65a30d", // olive
   "#16a34a", // green
-  "#059669", // emerald
   "#0d9488", // teal
   "#0891b2", // cyan
   "#0284c7", // sky
@@ -59,6 +58,7 @@ export const TIER_COLOR_PRESETS: string[] = [
   "#9333ea", // purple
   "#c026d3", // fuchsia
   "#db2777", // pink
+  "#e11d48", // rose
   "#475569", // slate
 ];
 
@@ -66,7 +66,7 @@ const DEFAULT_TIER_COLORS: Record<string, string> = {
   S: "#dc2626",
   A: "#ea580c",
   B: "#ca8a04",
-  C: "#16a34a",
+  C: "#0d9488",
   D: "#475569",
 };
 

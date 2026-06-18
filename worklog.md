@@ -88,3 +88,75 @@ Stage Summary:
 - NEW: Real-time 2-player multiplayer via socket.io mini-service (:3003) + Caddy XTransformPort routing. Room codes, share links, presence, live state sync.
 - Design significantly upgraded per brief: richer dark theme, glass panels, elegant tier rows, tactile cards, clean grouped sidebar, strong typography, generous spacing.
 - Services running: Next.js :3000, room-service :3003, Caddy :81. Lint clean.
+
+---
+Task ID: 3
+Agent: full-stack-developer
+Task: Extend the existing standalone socket.io room-service (`mini-services/room-service/index.ts`, port 3003) with a real-time **voting system** for RankForge: the host starts a vote on an item, the item pops up for all peers, each peer casts one vote for a tier, a live tally broadcasts, and the host ends the vote to announce the winning tier.
+
+Work Log:
+- Read Task 1 worklog + the full existing `index.ts` to preserve all existing behavior (room:join, room:state, board:update, board:sync-request, board:sync, presence:update, disconnect, host promotion). All original handlers left untouched.
+- Added `VoteState` interface (`{ itemId, item, votes: Map<socketId, tierId>, startedBy }`) and a `vote: VoteState | null` field on `RoomState`. Updated `getOrCreateRoom` to initialize `vote: null`.
+- Added `voteStatePayload(room)` helper that returns `{ active, itemId, item, tally, voterCount, totalPeers }` by iterating `vote.votes.values()` once (single pass — tally + voterCount computed together).
+- Added 4 new socket handlers inside `io.on('connection')`, all wrapped in try/catch with `[event]`-prefixed logging:
+  - `vote:start { roomId, itemId, item }` — validates roomId/itemId are non-empty strings and item is a plain object (rejects null/arrays); requires `room.host === socket.id` else `room:error`; sets `room.vote`, broadcasts `vote:state` (active) to the whole room including sender.
+  - `vote:cast { roomId, itemId, tierId }` — validates all three non-empty (silent return otherwise); silently ignores if no active vote or `room.vote.itemId !== itemId` (stale vote); `votes.set(socket.id, tierId)` (overwrite = re-cast); broadcasts updated `vote:state` to whole room.
+  - `vote:end { roomId }` — host-only; computes winner = highest-count tierId, ties broken by ascending alphabetical tierId (deterministic, via `Array.from(votes.values()).sort()` + strict `>` so the alphabetically-first wins on ties); `winner = null` when no votes; emits `vote:result { itemId, tally, winner }` to room, clears `room.vote`, then emits a final inactive `vote:state` so clients close the overlay.
+  - `vote:cancel { roomId }` — host-only; clears `room.vote`, broadcasts inactive `vote:state`.
+- Updated the existing `disconnect` handler: after `forgetRoom` + `presence:update` per affected room, if `room.vote` is active and `room.vote.votes.has(socket.id)`, deletes the voter's entry and broadcasts a fresh `vote:state` so the tally updates live. Host promotion is still handled by `forgetRoom` (the new host can end/cancel the active vote — no extra logic needed).
+- Robustness: every new handler is wrapped in try/catch with `console.error` + (where applicable) a `room:error` emit; nothing can crash the connection loop. Existing `path:'/'`, CORS `*`, port 3003, ping 25s/60s, and SIGTERM/SIGINT graceful shutdown all preserved.
+
+Verification:
+- `bun --hot` did NOT auto-restart on the editor write (service.log mtime was stale vs index.ts mtime, and PID stayed at 3571 from Task 1). Killed the old process and relaunched with `nohup bun run dev > service.log 2>&1 &`. Fresh log shows `$ bun --hot index.ts` + `room-service on :3003`; `lsof -i:3003` shows bun PID 6779 LISTEN on `*:3003`.
+- TypeScript sanity check: `cd mini-services/room-service && bun build index.ts --target=bun --outfile=/tmp/rs-check.js` → `Bundled 59 modules in 14ms`, no errors.
+- End-to-end smoke test (throwaway socket.io-client script in `/tmp/rf-vote-smoke/`, since deleted) with host + 2 peers (Alice=p1, Bob=p2). All 9 scenarios passed:
+  - T1 non-host `vote:start` → `room:error { event:'vote:start', message:'only host can start a vote' }`.
+  - T2 host `vote:start` → 3× `vote:state` with `active:true`, `itemId:'i1'`, `item:{name:'Apple'}`, `tally:{}`, `voterCount:0`, `totalPeers:3`.
+  - T3 three votes (A,B,A) → `voterCount:3`, `tally:{"A":2,"B":1}`.
+  - T4 p2 re-casts as A → `voterCount:3`, `tally:{"A":3}` (overwrite confirmed).
+  - T5 `vote:cast` with wrong `itemId` → 0 states emitted (silently ignored).
+  - T6 non-host `vote:end` → `room:error { event:'vote:end', message:'only host can end a vote' }`, 0 `vote:result`.
+  - T7 host `vote:end` → `vote:result {"itemId":"i1","tally":{"A":2,"B":1},"winner":"A"}` to all 3 peers, followed by inactive `vote:state`.
+  - T8 host `vote:start` + `vote:cancel` → inactive `vote:state` (no `vote:result`).
+  - T9 p1 disconnects after casting a vote on active i3 → remaining peers get updated `vote:state` with `voterCount:1`, `tally:{"B":1}` (the dropped voter's A is removed).
+- Extra edge cases verified with a second script: 2A-vs-2B tie → `winner:"A"` (alphabetically first); 0 votes → `winner:null`, `tally:{}`.
+- service.log confirms `[vote:start]`, `[vote:cast]`, `[vote:end]` (with `winner=...`), and `[vote:cancel]` lines are emitted as expected.
+
+Files Modified:
+- `mini-services/room-service/index.ts` (+~180 lines: VoteState type, vote field, voteStatePayload, 4 vote handlers, disconnect vote cleanup).
+- `mini-services/room-service/service.log` (regenerated on restart).
+
+Stage Summary:
+- room-service on :3003 now also supports `vote:start`, `vote:cast`, `vote:end`, `vote:cancel` (host-gated start/end/cancel, peer vote, live `vote:state` tally, final `vote:result` with deterministic tie-breaking, disconnect-aware vote cleanup). All pre-existing room/board/presence behavior is unchanged.
+- Exact payloads for the frontend team:
+  - `vote:state` (broadcast on start / every cast / end / cancel / disconnect-of-voter): `{ active: boolean, itemId: string|null, item: Record<string,unknown>|null, tally: Record<tierId, number>, voterCount: number, totalPeers: number }`. When `active === false`, `itemId`/`item` are `null` and `tally` is `{}` — clients should close the vote overlay.
+  - `vote:result` (broadcast once when host ends): `{ itemId: string, tally: Record<tierId, number>, winner: string|null }`. `winner` is the tierId with the most votes (ties broken by ascending alphabetical tierId); `null` when nobody voted.
+- Error channel: all host-gate and validation failures emit `room:error { event: '<event>', message: '...' }` back to the offending socket only.
+- Next: a frontend agent can wire a `useVote` hook + vote overlay UI in `src/components/rankforge/` (host: "Start vote" affordance on each item-card; everyone: tier picker overlay driven by `vote:state`; result toast driven by `vote:result`).
+
+---
+Task ID: 4
+Agent: orchestrator (main)
+Task: Add voting system + refresh theme + cleaner PNG export + multiplayer how-to.
+
+Work Log:
+- Extended room-service (Task 3 by subagent) with vote:start/cast/end/cancel, vote:state broadcast, vote:result with winner (alphabetical tie-break). Added vote:sync-request so late joiners/reconnects hydrate active vote state. Added vote:state emission on room:join.
+- Refactored use-multiplayer into a MultiplayerProvider + context (was per-component isolated state → voting controls couldn't see room). Shared socket via src/lib/socket.ts singleton. File renamed .ts → .tsx (contains JSX).
+- Built src/hooks/use-voting.ts: listens to vote:state/vote:result, tracks myVote, host auto-places winner into winning tier on vote:result (single board:update syncs to all). Emits vote:sync-request on connect.
+- Built src/components/rankforge/voting-overlay.tsx: pop-up modal with the item card, tier vote buttons (colored, live counts, leading trophy, checkmark for my vote), progress bar, host End&place / Cancel, non-host waiting state. Plus VoteButton on each card (host starts vote on hover).
+- Built src/components/rankforge/voting-controls.tsx: sidebar section with Voting mode switch, host "Vote on next item" / End&place / Cancel, live badge. Hidden until connected to a room.
+- Built voting-context.tsx (VotingModeProvider) so cards can read votingMode without prop-drilling.
+- Refreshed theme (globals.css): cooler "midnight" palette — deep slate-blue charcoal (oklch hue 265) with indigo/violet ambient glows, refined violet brand gradient, gold accent for primary CTAs. Updated tier color presets (harmonious, added teal for C). VLM: coloration 9/10.
+- Cleaner PNG export: added rf-export-only (static branded ExportHeader with logo/title/description/item count shown only in export), rf-no-export hides editable header + card controls + section labels, rf-export-shell gets solid bg + padding + no glass blur. html-to-image at 2x.
+- Wired MultiplayerProvider + VotingModeProvider + VotingOverlay into rankforge-app.
+
+Verification (agent-browser 2-client via Caddy :81):
+- Voting golden path: P1(host) created room Q43UV → started vote on "Arcade Night" → overlay popped up on P1. P2 joined via ?room=Q43UV → overlay appeared (via vote:sync-request). P1 voted S, P2 voted A → live tally "S:1 A:1, 2 of 2 voted" on both. Host ended → toast "Arcade Night → A  A:1 · S:1" (alphabetical tie-break) → overlay closed on both → item auto-placed in A tier on BOTH clients (host placement synced). Service log confirms vote:end winner.
+- Voting overlay VLM: 9/10. Theme VLM: 9/10 polish, 9/10 coloration.
+- PNG export: "Board exported as PNG" toast, no errors. Lint clean. Both services running (:3000, :3003).
+
+Stage Summary:
+- NEW voting system: host starts a vote on any item (via sidebar "Vote on next item" or per-card Vote button in Voting mode) → item pops up for everyone in the room → each peer votes a tier → live tally → host ends → winner auto-placed, synced to all. Supports 2+ players, late joiners, re-casts, disconnect tally updates.
+- Refreshed cooler theme (slate-blue/violet) per "don't like the theme, improve coloration".
+- Cleaner PNG export (branded static header, solid bg, hidden chrome).
+- All existing functionality preserved.

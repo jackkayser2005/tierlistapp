@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useRankForge } from "@/lib/store";
 import type { TierItem } from "@/lib/tierlist";
+import { useVotingMode } from "./voting-context";
+import { VoteButton } from "./voting-overlay";
 
 const CARD_W = "w-[4.75rem] sm:w-24";
 const CARD_H = "h-[4.75rem] sm:h-24";
@@ -93,6 +95,7 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
 
   const deleteItem = useRankForge((s) => s.deleteItem);
   const updateItemLabel = useRankForge((s) => s.updateItemLabel);
+  const { votingMode } = useVotingMode();
   const [editOpen, setEditOpen] = React.useState(false);
   const [draft, setDraft] = React.useState(item.label);
 
@@ -193,6 +196,8 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
           <Trash2 className="size-3" />
         </Button>
       </div>
+
+      <VoteButton item={item} votingMode={votingMode} />
     </div>
   );
 }

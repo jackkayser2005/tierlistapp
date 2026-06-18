@@ -79,39 +79,39 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-/* Refined warm-neutral dark theme — deep charcoal, not pure black */
+/* Refined "midnight" dark theme — deep slate-blue charcoal, cool and rich */
 .dark {
-  --background: oklch(0.155 0.004 285);
-  --foreground: oklch(0.965 0.004 285);
-  --card: oklch(0.205 0.006 285);
-  --card-foreground: oklch(0.965 0.004 285);
-  --popover: oklch(0.195 0.006 285);
-  --popover-foreground: oklch(0.965 0.004 285);
+  --background: oklch(0.165 0.008 265);
+  --foreground: oklch(0.965 0.005 265);
+  --card: oklch(0.215 0.01 265);
+  --card-foreground: oklch(0.965 0.005 265);
+  --popover: oklch(0.205 0.011 265);
+  --popover-foreground: oklch(0.965 0.005 265);
   --primary: oklch(0.955 0 0);
-  --primary-foreground: oklch(0.18 0.006 285);
-  --secondary: oklch(0.255 0.006 285);
-  --secondary-foreground: oklch(0.965 0.004 285);
-  --muted: oklch(0.248 0.006 285);
-  --muted-foreground: oklch(0.66 0.012 285);
-  --accent: oklch(0.275 0.008 285);
-  --accent-foreground: oklch(0.965 0.004 285);
+  --primary-foreground: oklch(0.19 0.008 265);
+  --secondary: oklch(0.265 0.012 265);
+  --secondary-foreground: oklch(0.965 0.005 265);
+  --muted: oklch(0.255 0.011 265);
+  --muted-foreground: oklch(0.67 0.014 265);
+  --accent: oklch(0.28 0.014 265);
+  --accent-foreground: oklch(0.965 0.005 265);
   --destructive: oklch(0.668 0.198 22);
   --border: oklch(1 0 0 / 8%);
   --input: oklch(1 0 0 / 11%);
-  --ring: oklch(0.78 0.15 65);
+  --ring: oklch(0.72 0.14 265);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.198 0.006 285);
-  --sidebar-foreground: oklch(0.965 0.004 285);
-  --sidebar-primary: oklch(0.78 0.15 65);
-  --sidebar-primary-foreground: oklch(0.18 0.006 285);
-  --sidebar-accent: oklch(0.255 0.006 285);
-  --sidebar-accent-foreground: oklch(0.965 0.004 285);
+  --sidebar: oklch(0.205 0.011 265);
+  --sidebar-foreground: oklch(0.965 0.005 265);
+  --sidebar-primary: oklch(0.72 0.14 265);
+  --sidebar-primary-foreground: oklch(0.19 0.008 265);
+  --sidebar-accent: oklch(0.265 0.012 265);
+  --sidebar-accent-foreground: oklch(0.965 0.005 265);
   --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.78 0.15 65);
+  --sidebar-ring: oklch(0.72 0.14 265);
 }
 
 @layer base {
@@ -130,19 +130,19 @@
    RankForge design system
    ============================================================ */
 
-/* Ambient app background — layered radial glows over warm charcoal */
+/* Ambient app background — layered cool radial glows over slate-charcoal */
 .rf-app-bg {
   background-color: var(--background);
   background-image:
-    radial-gradient(48rem 48rem at 88% -8%, color-mix(in oklch, oklch(0.74 0.16 55) 13%, transparent), transparent 62%),
-    radial-gradient(42rem 42rem at -8% 8%, color-mix(in oklch, oklch(0.62 0.18 18) 9%, transparent), transparent 58%),
-    radial-gradient(36rem 36rem at 50% 118%, color-mix(in oklch, oklch(0.66 0.14 300) 6%, transparent), transparent 60%);
+    radial-gradient(46rem 46rem at 86% -10%, color-mix(in oklch, oklch(0.62 0.16 280) 14%, transparent), transparent 62%),
+    radial-gradient(40rem 40rem at -10% 6%, color-mix(in oklch, oklch(0.58 0.14 220) 10%, transparent), transparent 58%),
+    radial-gradient(34rem 34rem at 50% 120%, color-mix(in oklch, oklch(0.66 0.12 190) 5%, transparent), transparent 60%);
   background-attachment: fixed;
 }
 
 /* Glass panels — soft, elevated, translucent */
 .rf-panel {
-  background: color-mix(in oklch, var(--card) 78%, transparent);
+  background: color-mix(in oklch, var(--card) 80%, transparent);
   backdrop-filter: blur(16px) saturate(150%);
   -webkit-backdrop-filter: blur(16px) saturate(150%);
   border: 1px solid color-mix(in oklch, white 7%, transparent);
@@ -152,7 +152,7 @@
     0 12px 36px -16px rgb(0 0 0 / 0.65);
 }
 .rf-panel-soft {
-  background: color-mix(in oklch, var(--card) 60%, transparent);
+  background: color-mix(in oklch, var(--card) 62%, transparent);
   backdrop-filter: blur(12px) saturate(140%);
   -webkit-backdrop-filter: blur(12px) saturate(140%);
   border: 1px solid color-mix(in oklch, white 6%, transparent);
@@ -160,19 +160,24 @@
 
 /* Inset surface — used for inputs and dropzone interiors */
 .rf-inset {
-  background: color-mix(in oklch, black 18%, var(--card));
+  background: color-mix(in oklch, black 20%, var(--card));
   border: 1px solid color-mix(in oklch, white 5%, transparent);
 }
 
-/* Brand gradient — warm amber → ember */
+/* Brand gradient — refined indigo → violet → soft magenta */
 .rf-brand {
-  background-image: linear-gradient(105deg, oklch(0.85 0.15 80), oklch(0.76 0.18 58) 48%, oklch(0.66 0.21 28));
+  background-image: linear-gradient(105deg, oklch(0.7 0.16 270), oklch(0.66 0.19 295) 50%, oklch(0.62 0.2 320));
 }
 .rf-brand-text {
-  background-image: linear-gradient(105deg, oklch(0.86 0.14 82), oklch(0.76 0.18 58) 50%, oklch(0.68 0.20 30));
+  background-image: linear-gradient(105deg, oklch(0.74 0.15 268), oklch(0.68 0.18 295) 52%, oklch(0.66 0.19 322));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+
+/* Accent gradient — warm gold, used sparingly for primary CTAs */
+.rf-accent {
+  background-image: linear-gradient(105deg, oklch(0.82 0.13 85), oklch(0.76 0.15 70));
 }
 
 /* Section header — small caps label with leading dot */
@@ -191,8 +196,8 @@
   width: 0.375rem;
   height: 0.375rem;
   border-radius: 9999px;
-  background: linear-gradient(135deg, oklch(0.82 0.15 75), oklch(0.66 0.21 28));
-  box-shadow: 0 0 8px color-mix(in oklch, oklch(0.74 0.18 55) 60%, transparent);
+  background: linear-gradient(135deg, oklch(0.72 0.16 280), oklch(0.66 0.19 310));
+  box-shadow: 0 0 8px color-mix(in oklch, oklch(0.7 0.17 290) 60%, transparent);
 }
 
 /* Custom scrollbars — slim, subtle */
@@ -223,8 +228,8 @@
   opacity: 0.3;
 }
 .rf-drop-active {
-  background: color-mix(in oklch, oklch(0.82 0.15 70) 7%, transparent) !important;
-  box-shadow: inset 0 0 0 2px color-mix(in oklch, oklch(0.82 0.15 70) 55%, transparent);
+  background: color-mix(in oklch, oklch(0.72 0.16 285) 7%, transparent) !important;
+  box-shadow: inset 0 0 0 2px color-mix(in oklch, oklch(0.72 0.16 285) 55%, transparent);
 }
 
 /* Native color input reset */
@@ -259,11 +264,36 @@ input[type="color"]::-webkit-color-swatch {
 .rf-live-dot {
   animation: rf-pulse-dot 1.8s ease-in-out infinite;
 }
+@keyframes rf-pop-in {
+  from { opacity: 0; transform: scale(0.94) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.rf-pop-in {
+  animation: rf-pop-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
 
 /* When capturing the board for PNG export, hide UI chrome */
 .rf-exporting .rf-no-export {
   display: none !important;
 }
-.rf-exporting .rf-export-bg {
+/* Elements shown only in the PNG export (hidden in the live app) */
+.rf-export-only {
+  display: none;
+}
+.rf-exporting .rf-export-only {
+  display: block;
+}
+.rf-exporting .rf-export-shell {
   background: var(--background) !important;
+  border: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  padding: 28px !important;
+  border-radius: 20px !important;
+}
+/* In export, give tier rows + unranked a cleaner solid look (no glass blur) */
+.rf-exporting .rf-panel {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }

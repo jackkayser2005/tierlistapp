@@ -43,6 +43,7 @@ import { useRankForge, buildExport } from "@/lib/store";
 import { normalizeBoard, type RankForgeBoard } from "@/lib/tierlist";
 import { ColorPicker } from "./color-picker";
 import { MultiplayerPanel } from "./multiplayer-panel";
+import { VotingControls } from "./voting-controls";
 import { downscaleImage, readFileAsDataURL, slugify } from "@/lib/image";
 import {
   Popover,
@@ -519,6 +520,7 @@ export function ControlPanelContent({
   return (
     <div className={cn("space-y-7", className)}>
       <MultiplayerPanel />
+      <VotingControls />
       <AddItemSection />
       <TiersSection />
       <BoardSection />
