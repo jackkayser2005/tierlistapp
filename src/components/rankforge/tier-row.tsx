@@ -81,9 +81,10 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
               }
             }}
             aria-label="Tier name"
-            className="w-full bg-transparent text-center text-2xl font-black tracking-tight uppercase outline-none transition focus:rounded-md focus:bg-black/15 sm:text-[1.75rem]"
-            style={{ color: textColor }}
-            maxLength={14}
+            className="w-full bg-transparent text-center font-black uppercase leading-tight outline-none transition focus:rounded-md focus:bg-black/15"
+            style={{ color: textColor, fontSize: tier.name.length > 6 ? "1rem" : tier.name.length > 3 ? "1.5rem" : "1.75rem" }}
+            maxLength={28}
+            size={1}
           />
         </div>
 

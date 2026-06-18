@@ -610,6 +610,54 @@ io.on('connection', (socket: Socket) => {
     }
   })
 
+  // ----- focus:set -------------------------------------------------------
+  // A user is hovering / started dragging a specific item. PURE RELAY — we
+  // do NOT store any focus state server-side (it's ephemeral; clients clear
+  // it on a timer). Validates roomId + itemId are non-empty strings, looks
+  // up the room + the user (socket.id -> members; if not found, silent
+  // return), then relays to OTHER clients in the room so they can render a
+  // colored highlight + the focusing user's avatar on that item.
+  // High-frequency event: NO log line per emit (would spam — debug only if
+  // ever needed).
+  socket.on('focus:set', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string; itemId?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      const itemId = typeof data.itemId === 'string' ? data.itemId.trim() : ''
+      if (!roomId || !itemId) return
+
+      const room = rooms.get(roomId)
+      if (!room) return
+      const user = room.members.get(socket.id)
+      if (!user) return
+
+      socket.to(roomId).emit('focus:set', {
+        userId: socket.id,
+        userName: user.name,
+        userColor: user.color,
+        itemId,
+      })
+    } catch (err) {
+      console.error(`[focus:set] error from ${socket.id}:`, err)
+    }
+  })
+
+  // ----- focus:clear -----------------------------------------------------
+  // A user stopped hovering / dragging. PURE RELAY — no server state to
+  // clean up. Validates roomId, then relays to OTHER clients in the room so
+  // they can drop that user's highlight.
+  socket.on('focus:clear', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      if (!roomId) return
+
+      socket.to(roomId).emit('focus:clear', { userId: socket.id })
+    } catch (err) {
+      console.error(`[focus:clear] error from ${socket.id}:`, err)
+    }
+  })
+
   // ----- heartbeat -------------------------------------------------------
   // Client emits this every ~20s (no payload). Server refreshes the user's
   // lastSeen across all rooms they're in. The server-side sweep uses
@@ -864,6 +912,16 @@ io.on('connection', (socket: Socket) => {
           const room = rooms.get(roomId)
           // Capture the user BEFORE forgetRoom mutates the members Map.
           const user = room?.members.get(socket.id)
+
+          // Relay focus:clear to OTHER clients in this room so they remove
+          // the disconnecting user's highlight. The socket is still valid
+          // for one last `to()` emit during disconnect (it hasn't been
+          // `leave()`'d yet), so we do this BEFORE forgetRoom/leave.
+          try {
+            socket.to(roomId).emit('focus:clear', { userId: socket.id })
+          } catch {
+            /* best-effort; never crash disconnect cleanup */
+          }
 
           forgetRoom(socket.id, roomId)
           socket.leave(roomId)

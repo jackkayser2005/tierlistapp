@@ -23,6 +23,7 @@ import { useRankForge } from "@/lib/store";
 import { UNRANKED_ID } from "@/lib/tierlist";
 import { usePngExport } from "@/hooks/use-png-export";
 import { MultiplayerProvider, useMultiplayer } from "@/hooks/use-multiplayer";
+import { VotingProvider } from "@/hooks/use-voting";
 import { Header } from "./header";
 import { TierBoard } from "./tier-board";
 import { UnrankedPool } from "./unranked-pool";
@@ -128,7 +129,9 @@ export function RankForgeApp() {
 
   return (
     <MultiplayerProvider>
-      <RankForgeInner />
+      <VotingProvider>
+        <RankForgeInner />
+      </VotingProvider>
     </MultiplayerProvider>
   );
 }

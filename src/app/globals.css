@@ -45,7 +45,7 @@
 }
 
 :root {
-  --radius: 0.875rem;
+  --radius: 0.75rem;
   --background: oklch(0.99 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -79,39 +79,39 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-/* "Afterdark" — rich, punchy, party-ready. Deep indigo base with vibrant accents. */
+/* "Slate" — sleek, production-ready. Deep neutral with a single refined accent. */
 .dark {
-  --background: oklch(0.15 0.012 280);
-  --foreground: oklch(0.97 0.004 280);
-  --card: oklch(0.205 0.014 280);
-  --card-foreground: oklch(0.97 0.004 280);
-  --popover: oklch(0.195 0.016 280);
-  --popover-foreground: oklch(0.97 0.004 280);
+  --background: oklch(0.145 0.003 265);
+  --foreground: oklch(0.96 0.002 265);
+  --card: oklch(0.195 0.004 265);
+  --card-foreground: oklch(0.96 0.002 265);
+  --popover: oklch(0.185 0.005 265);
+  --popover-foreground: oklch(0.96 0.002 265);
   --primary: oklch(0.96 0 0);
-  --primary-foreground: oklch(0.18 0.01 280);
-  --secondary: oklch(0.265 0.016 280);
-  --secondary-foreground: oklch(0.97 0.004 280);
-  --muted: oklch(0.255 0.014 280);
-  --muted-foreground: oklch(0.68 0.016 280);
-  --accent: oklch(0.295 0.018 280);
-  --accent-foreground: oklch(0.97 0.004 280);
-  --destructive: oklch(0.668 0.198 22);
-  --border: oklch(1 0 0 / 8%);
-  --input: oklch(1 0 0 / 11%);
-  --ring: oklch(0.75 0.16 300);
+  --primary-foreground: oklch(0.18 0.004 265);
+  --secondary: oklch(0.245 0.005 265);
+  --secondary-foreground: oklch(0.96 0.002 265);
+  --muted: oklch(0.235 0.004 265);
+  --muted-foreground: oklch(0.62 0.008 265);
+  --accent: oklch(0.27 0.006 265);
+  --accent-foreground: oklch(0.96 0.002 265);
+  --destructive: oklch(0.65 0.19 22);
+  --border: oklch(1 0 0 / 7%);
+  --input: oklch(1 0 0 / 10%);
+  --ring: oklch(0.6 0.12 265);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.198 0.014 280);
-  --sidebar-foreground: oklch(0.97 0.004 280);
-  --sidebar-primary: oklch(0.75 0.16 300);
-  --sidebar-primary-foreground: oklch(0.18 0.01 280);
-  --sidebar-accent: oklch(0.265 0.016 280);
-  --sidebar-accent-foreground: oklch(0.97 0.004 280);
-  --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.75 0.16 300);
+  --sidebar: oklch(0.19 0.004 265);
+  --sidebar-foreground: oklch(0.96 0.002 265);
+  --sidebar-primary: oklch(0.6 0.12 265);
+  --sidebar-primary-foreground: oklch(0.18 0.004 265);
+  --sidebar-accent: oklch(0.245 0.005 265);
+  --sidebar-accent-foreground: oklch(0.96 0.002 265);
+  --sidebar-border: oklch(1 0 0 / 7%);
+  --sidebar-ring: oklch(0.6 0.12 265);
 }
 
 @layer base {
@@ -120,74 +120,78 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-feature-settings: "ss01", "cv01", "cv03";
+    font-feature-settings: "ss01", "cv01", "cv03", "cv11";
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+    letter-spacing: -0.011em;
+  }
+  /* Tighter heading tracking for a more designed feel */
+  h1, h2, h3 {
+    letter-spacing: -0.025em;
   }
 }
 
 /* ============================================================
-   RankForge design system — fun, bold, party-ready
+   RankForge design system — sleek & production-ready
    ============================================================ */
 
-/* Ambient app background — vibrant layered glows over deep indigo */
+/* Ambient background — very subtle, single soft glow */
 .rf-app-bg {
   background-color: var(--background);
   background-image:
-    radial-gradient(44rem 44rem at 88% -8%, color-mix(in oklch, oklch(0.7 0.2 300) 18%, transparent), transparent 60%),
-    radial-gradient(38rem 38rem at -8% 4%, color-mix(in oklch, oklch(0.65 0.22 330) 13%, transparent), transparent 58%),
-    radial-gradient(32rem 32rem at 50% 120%, color-mix(in oklch, oklch(0.68 0.18 200) 7%, transparent), transparent 60%);
+    radial-gradient(50rem 50rem at 90% -10%, color-mix(in oklch, oklch(0.55 0.12 265) 10%, transparent), transparent 60%);
   background-attachment: fixed;
 }
 
-/* Glass panels — soft, elevated, translucent */
+/* Panels — clean, solid, subtle border. Less glass, more structure. */
 .rf-panel {
-  background: color-mix(in oklch, var(--card) 82%, transparent);
-  backdrop-filter: blur(16px) saturate(160%);
-  -webkit-backdrop-filter: blur(16px) saturate(160%);
-  border: 1px solid color-mix(in oklch, white 8%, transparent);
+  background: color-mix(in oklch, var(--card) 90%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid color-mix(in oklch, white 6%, transparent);
   box-shadow:
-    0 1px 0 0 color-mix(in oklch, white 6%, transparent) inset,
-    0 1px 2px 0 rgb(0 0 0 / 0.3),
-    0 12px 36px -16px rgb(0 0 0 / 0.7);
+    0 1px 0 0 color-mix(in oklch, white 4%, transparent) inset,
+    0 1px 3px 0 rgb(0 0 0 / 0.4),
+    0 8px 24px -12px rgb(0 0 0 / 0.6);
 }
 .rf-panel-soft {
-  background: color-mix(in oklch, var(--card) 64%, transparent);
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
-  border: 1px solid color-mix(in oklch, white 7%, transparent);
+  background: color-mix(in oklch, var(--card) 70%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid color-mix(in oklch, white 5%, transparent);
 }
 
 /* Inset surface */
 .rf-inset {
-  background: color-mix(in oklch, black 22%, var(--card));
-  border: 1px solid color-mix(in oklch, white 5%, transparent);
+  background: color-mix(in oklch, black 24%, var(--card));
+  border: 1px solid color-mix(in oklch, white 4%, transparent);
 }
 
-/* Brand gradient — vivid violet → magenta */
+/* Brand — refined indigo, subtle */
 .rf-brand {
-  background-image: linear-gradient(105deg, oklch(0.7 0.2 295), oklch(0.66 0.22 320) 50%, oklch(0.64 0.24 345));
+  background-image: linear-gradient(135deg, oklch(0.62 0.14 268), oklch(0.58 0.15 285));
 }
 .rf-brand-text {
-  background-image: linear-gradient(105deg, oklch(0.78 0.18 290), oklch(0.7 0.2 320) 52%, oklch(0.68 0.22 345));
+  background-image: linear-gradient(135deg, oklch(0.72 0.12 268), oklch(0.66 0.14 290));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
 
-/* Accent gradient — warm gold for primary CTAs (high contrast on indigo) */
+/* Accent — emerald for primary CTAs (fresh, modern, high-contrast on dark) */
 .rf-accent {
-  background-image: linear-gradient(105deg, oklch(0.85 0.14 85), oklch(0.8 0.16 65));
+  background-image: linear-gradient(135deg, oklch(0.72 0.15 160), oklch(0.68 0.14 175));
 }
 
-/* Section header — small caps label with leading dot */
+/* Section header */
 .rf-section-label {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
   font-size: 0.6875rem;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted-foreground);
 }
@@ -196,65 +200,62 @@
   width: 0.375rem;
   height: 0.375rem;
   border-radius: 9999px;
-  background: linear-gradient(135deg, oklch(0.72 0.2 300), oklch(0.66 0.22 330));
-  box-shadow: 0 0 8px color-mix(in oklch, oklch(0.72 0.2 320) 65%, transparent);
+  background: oklch(0.62 0.14 280);
+  box-shadow: 0 0 6px color-mix(in oklch, oklch(0.62 0.14 280) 50%, transparent);
 }
 
-/* Bold playful button — used for primary actions like Start a live room */
+/* Primary button — sleek, subtle lift */
 .rf-btn-primary {
-  background-image: linear-gradient(105deg, oklch(0.72 0.2 295), oklch(0.66 0.22 325));
+  background-image: linear-gradient(135deg, oklch(0.64 0.14 268), oklch(0.58 0.15 288));
   color: #fff;
-  font-weight: 700;
-  box-shadow: 0 4px 14px -4px color-mix(in oklch, oklch(0.7 0.2 320) 60%, transparent);
-  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+  font-weight: 600;
+  box-shadow: 0 1px 0 0 rgba(255,255,255,0.15) inset, 0 2px 8px -2px color-mix(in oklch, oklch(0.6 0.14 280) 40%, transparent);
+  transition: transform 0.1s ease, filter 0.1s ease, box-shadow 0.1s ease;
 }
 .rf-btn-primary:hover {
   transform: translateY(-1px);
-  filter: brightness(1.08);
-  box-shadow: 0 8px 22px -6px color-mix(in oklch, oklch(0.7 0.2 320) 70%, transparent);
+  filter: brightness(1.1);
+  box-shadow: 0 1px 0 0 rgba(255,255,255,0.2) inset, 0 6px 16px -4px color-mix(in oklch, oklch(0.6 0.14 280) 50%, transparent);
 }
 .rf-btn-primary:active {
   transform: translateY(0) scale(0.98);
 }
 
-/* Accent button — gold, for "place" / vote actions */
+/* Accent button — emerald, for vote/place actions */
 .rf-btn-accent {
-  background-image: linear-gradient(105deg, oklch(0.85 0.14 85), oklch(0.8 0.16 65));
-  color: #1a1320;
+  background-image: linear-gradient(135deg, oklch(0.72 0.15 160), oklch(0.66 0.14 178));
+  color: #042818;
   font-weight: 700;
-  box-shadow: 0 4px 14px -4px color-mix(in oklch, oklch(0.82 0.15 75) 55%, transparent);
-  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+  box-shadow: 0 1px 0 0 rgba(255,255,255,0.2) inset, 0 2px 8px -2px color-mix(in oklch, oklch(0.7 0.15 168) 40%, transparent);
+  transition: transform 0.1s ease, filter 0.1s ease, box-shadow 0.1s ease;
 }
 .rf-btn-accent:hover {
   transform: translateY(-1px);
-  filter: brightness(1.06);
-  box-shadow: 0 8px 22px -6px color-mix(in oklch, oklch(0.82 0.15 75) 65%, transparent);
+  filter: brightness(1.08);
+  box-shadow: 0 1px 0 0 rgba(255,255,255,0.25) inset, 0 6px 16px -4px color-mix(in oklch, oklch(0.7 0.15 168) 50%, transparent);
 }
 .rf-btn-accent:active {
   transform: translateY(0) scale(0.98);
 }
 
-/* Custom scrollbars */
+/* Scrollbars */
 .rf-scroll {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklch, white 14%, transparent) transparent;
+  scrollbar-color: color-mix(in oklch, white 12%, transparent) transparent;
 }
 .rf-scroll::-webkit-scrollbar {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
 }
 .rf-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 .rf-scroll::-webkit-scrollbar-thumb {
-  background: color-mix(in oklch, white 12%, transparent);
+  background: color-mix(in oklch, white 10%, transparent);
   border-radius: 9999px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
 }
 .rf-scroll::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklch, white 22%, transparent);
-  background-clip: padding-box;
+  background: color-mix(in oklch, white 18%, transparent);
 }
 
 /* Drag affordances */
@@ -262,8 +263,8 @@
   opacity: 0.3;
 }
 .rf-drop-active {
-  background: color-mix(in oklch, oklch(0.72 0.2 310) 8%, transparent) !important;
-  box-shadow: inset 0 0 0 2px color-mix(in oklch, oklch(0.72 0.2 310) 55%, transparent);
+  background: color-mix(in oklch, oklch(0.6 0.12 268) 6%, transparent) !important;
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklch, oklch(0.6 0.12 268) 45%, transparent);
 }
 
 /* Native color input reset */
@@ -285,35 +286,35 @@ input[type="color"]::-webkit-color-swatch {
 
 /* Animations */
 @keyframes rf-rise {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .rf-rise {
-  animation: rf-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: rf-rise 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 @keyframes rf-pulse-dot {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  50% { opacity: 0.35; }
 }
 .rf-live-dot {
   animation: rf-pulse-dot 1.8s ease-in-out infinite;
 }
 @keyframes rf-pop-in {
-  from { opacity: 0; transform: scale(0.94) translateY(10px); }
+  from { opacity: 0; transform: scale(0.95) translateY(8px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
 .rf-pop-in {
-  animation: rf-pop-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: rf-pop-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 @keyframes rf-glow-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklch, oklch(0.72 0.2 320) 0%, transparent); }
-  50% { box-shadow: 0 0 24px 4px color-mix(in oklch, oklch(0.72 0.2 320) 35%, transparent); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklch, oklch(0.6 0.14 280) 0%, transparent); }
+  50% { box-shadow: 0 0 12px 2px color-mix(in oklch, oklch(0.6 0.14 280) 25%, transparent); }
 }
 .rf-glow {
-  animation: rf-glow-pulse 2.4s ease-in-out infinite;
+  animation: rf-glow-pulse 2.8s ease-in-out infinite;
 }
 
-/* PNG export: hide chrome, show branded shell */
+/* PNG export */
 .rf-exporting .rf-no-export {
   display: none !important;
 }

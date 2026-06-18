@@ -299,7 +299,7 @@ function TiersSection() {
 
             <Input
               value={tier.name}
-              maxLength={14}
+              maxLength={28}
               onChange={(e) => updateTier(tier.id, { name: e.target.value })}
               className="h-8 flex-1 border-transparent bg-transparent px-1.5 font-semibold shadow-none focus-visible:bg-white/[0.04]"
             />

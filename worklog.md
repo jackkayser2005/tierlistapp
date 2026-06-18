@@ -269,3 +269,94 @@ Stage Summary:
 - Anyone can add items/upload images. Host-only vote start/end enforced on server.
 - Hosting guide written (HOSTING.md) + socket.ts updated for production env var.
 - All existing functionality preserved.
+
+---
+Task ID: 7
+Agent: full-stack-developer
+Task: Add a lightweight, stateless focus/cursor relay to the existing RankForge room-service (socket.io on port 3003). Two new events — `focus:set` and `focus:clear` — let users broadcast which item they're hovering/dragging so other clients can show a colored highlight + that user's avatar on the item. Pure relay: no server-side focus storage.
+
+Work Log:
+- Read Task 0–6 worklog + the full existing `mini-services/room-service/index.ts` (935 lines: identity, room:join with 10-user cap, board:update relay with seq+eventId, activity:log, presence:set, heartbeat, board:sync-request, vote:sync-request, vote:start/cast/end/cancel, disconnect with host promotion + vote scrub, heartbeat sweep, graceful shutdown). All existing handlers preserved untouched.
+- Added 2 new socket handlers inside `io.on('connection')`, placed right after `presence:set` and before `heartbeat` (logical grouping — focus is a fine-grained, ephemeral attention signal akin to presence). Both wrapped in try/catch with `[event]`-prefixed error logging (errors only, never per-emit spam):
+  - **`focus:set`** (payload `{ roomId?: string; itemId?: string }`):
+    - Validates `roomId` and `itemId` are non-empty strings (trim, then truthy check). Silent return otherwise.
+    - Looks up the room via `rooms.get(roomId)`; silent return if not found (must `room:join` first).
+    - Looks up the user via `room.members.get(socket.id)`; silent return if not a member.
+    - Relays to OTHER clients in the room only (no self-echo) via `socket.to(roomId).emit('focus:set', { userId: socket.id, userName: user.name, userColor: user.color, itemId })`.
+    - NO server-side state stored — focus is purely ephemeral; clients clear it on a timer.
+    - NO per-emit log line (high-frequency event; would spam — debug only if ever needed).
+  - **`focus:clear`** (payload `{ roomId?: string }`):
+    - Validates `roomId` is a non-empty string. Silent return otherwise.
+    - Relays to OTHER clients in the room only via `socket.to(roomId).emit('focus:clear', { userId: socket.id })`.
+    - No state to clean up.
+- Updated the existing `disconnect` handler: inside the per-room loop, BEFORE `forgetRoom(socket.id, roomId)` and `socket.leave(roomId)`, emit `socket.to(roomId).emit('focus:clear', { userId: socket.id })` so other clients remove the disconnecting user's highlight. The socket is still valid for one last `to()` emit during disconnect (it hasn't been `leave()`'d yet). Wrapped in its own try/catch with empty catch (best-effort; never crash disconnect cleanup).
+- Constraints honored: stateless (no focus storage added to RoomState or anywhere else), pure relay (`socket.to()` only — no `io.to()` self-broadcast), no existing handler logic touched, port 3003 / path "/" / CORS "*" all preserved, every new code path wrapped in try/catch.
+
+Verification:
+- TypeScript sanity check: `cd mini-services/room-service && bun build index.ts --target=bun --outfile=/tmp/rs-check.js` → `rs-check.js 0.47 MB` (entry point), no errors.
+- Restart: `pkill -f "bun --hot index.ts"` cleared 7 stale room-service processes accumulated from Tasks 1–6 (PIDs 3571/8667/10315/12675/15322/15385/16928 — `pkill -f "room-service/index.ts"` didn't match because `ps` shows `bun --hot index.ts` without the working-directory prefix). Used `setsid bun run dev > service.log 2>&1 < /dev/null &` to fully detach (plain `nohup ... &` was being reaped when the bash tool's session exited). After restart: `lsof -i:3003` → bun PID 17448 LISTEN on `*:3003`; `service.log` shows `$ bun --hot index.ts` + `room-service on :3003` with no errors.
+- End-to-end smoke test (throwaway `socket.io-client` script in `/home/z/rf-focus-smoke/`, since deleted) with Alice (host) + Bob (guest) + Carol (non-member). 19 assertions, all passed:
+  - T1 Alice `focus:set { roomId, itemId:'i1' }` → Bob receives `{ userId: alice.id, userName:'Alice', userColor:'#f43f5e', itemId:'i1' }`; NO self-echo to Alice.
+  - T2 Bob `focus:set { roomId, itemId:'i2' }` → Alice receives `{ userId: bob.id, userName:'Bob', userColor:'#22c55e', itemId:'i2' }` (bidirectional relay confirmed).
+  - T3 Alice `focus:clear { roomId }` → Bob receives `{ userId: alice.id }` and ONLY that key (minimal payload, no itemId echo).
+  - T4 `focus:set { roomId }` (missing itemId) → no relay (silent return).
+  - T5 Carol (connected, identity set, but never `room:join`'d) emits `focus:set { roomId, itemId:'i3' }` → no relay (non-member silent return).
+  - T6 `focus:set { roomId:'NO-SUCH-ROOM', itemId:'i9' }` → no relay (nonexistent room silent return).
+  - T7 Bob `disconnect()` → Alice receives `focus:clear { userId: bob.id }` (disconnect relay confirmed; captured `bob.id` before disconnect because socket.io-client clears `.id` on disconnect).
+- service.log confirms connect/identity/room:join/disconnect lines as expected and NO errors. Note: there are intentionally NO `[focus:set]` / `[focus:clear]` log lines per emit (high-frequency event — kept quiet per spec).
+
+Deviations from spec: none. Followed the spec literally — stateless, no existing handler touched, try/catch wrapping, port 3003 / path "/" / CORS "*" preserved, disconnect emits focus:clear before cleanup.
+
+Files Modified:
+- `mini-services/room-service/index.ts` (+~75 lines: 2 new relay handlers + disconnect focus:clear emit).
+- `mini-services/room-service/service.log` (regenerated on restart).
+
+Stage Summary:
+- room-service on :3003 now also relays `focus:set` and `focus:clear` for cursor/hover highlight. Pure relay, stateless, no per-emit logging. 19/19 smoke assertions pass. Compile clean. No errors in service.log.
+- Exact payloads for the frontend team:
+  - **Client → Server**: `focus:set { roomId: string, itemId: string }`, `focus:clear { roomId: string }`.
+  - **Server → Client** (relayed to OTHER clients in the room, NOT sender): `focus:set { userId: string, userName: string, userColor: string, itemId: string }`, `focus:clear { userId: string }`.
+  - **On disconnect**: server auto-emits `focus:clear { userId: <disconnected-socket-id> }` to each room the socket was in (before membership cleanup), so other clients drop the highlight without waiting for a client-side timer.
+- Frontend integration notes (for the next agent):
+  - Emit `focus:set { roomId, itemId }` on item hover/drag-start (throttle on the client side — e.g. only emit when the focused itemId actually changes).
+  - Emit `focus:clear { roomId }` on hover-end/drag-end/blur.
+  - Listen for `focus:set` and render a colored ring + small avatar (using `userColor` + `userName`) on the matching item card.
+  - Listen for `focus:clear` and remove that user's highlight.
+  - Use a client-side timer (e.g. 5s) as a safety net to auto-clear highlights in case a `focus:clear` is missed — the server keeps no state so a missed relay can't be recovered.
+  - On `disconnect` of a peer (detected via `presence:update` member list shrinking), the server will already have emitted `focus:clear` for that user — but it's safe to also clear any highlight for a missing userId on the next `presence:update`.
+
+---
+Task ID: 8
+Agent: orchestrator (main)
+Task: Fix voting bugs, improve connection stability, speed, design refresh, focus highlights, longer names, soft-delete.
+
+Work Log:
+- **CRITICAL FIX: Voting context** — Converted useVoting from a per-component hook (called 3x, each with independent state + socket listeners = root cause of "breaks after first item" and "doesn't work with multiple users") to a proper VotingProvider context with a SINGLE set of socket listeners and shared state. File: use-voting.ts → use-voting.tsx. Wrapped app in VotingProvider.
+- **Focus/cursor feature** — Added focus:set/focus:clear relay events to room service (Task 7 subagent, 19/19 tests). Added FocusInfo type + focuses state to MultiplayerProvider. ItemCard now emits focus:set on mouseEnter, focus:clear on mouseLeave. Other clients see a colored ring + initials avatar badge on the focused item. Auto-expires after 4s.
+- **Connection stability** — Added disconnect event handler (status → "connecting" on socket disconnect). Improved reconnect handler to re-join room + emit vote:sync-request for vote state recovery. Socket.io auto-reconnect with proper re-authentication.
+- **Speed optimizations** — Voting hook uses refs (isHostRef, roomIdRef) instead of deps so socket listeners bind only to [status, roomId] (not every store change). Board broadcast debounced at 120ms (existing). Presence throttled at 400ms (existing). Focus throttled at 250ms. castVote reads current vote state via functional setState (no stale closure).
+- **Winner celebration** — Added CelebrationOverlay: when vote ends, a full-screen celebratory modal appears for 3.5s with the winner tier color, trophy, sparkle decorations, and mini tally bars. Dismissible by tapping anywhere.
+- **More interactive voting** — Vote buttons now have animated bar fills from the bottom (height proportional to vote count). Added "✓ You voted" confirmation text. Vote overlay header says "Vote now!" with glowing brand icon.
+- **Longer tier names** — maxLength 14 → 28. Font size auto-scales (1.75rem for ≤3 chars, 1.5rem for ≤6, 1rem for longer). Input uses size={1} + w-full for proper width.
+- **Soft-delete items** — Trash button now moves item to Unranked (if in a tier) with an "Undo" toast (5s timeout). If already in Unranked, hard-deletes with "Undo" that re-adds the item.
+- **Design refresh: "Slate" theme** — Deeper, more neutral base (oklch 0.145, very low chroma). Single subtle ambient glow (not 3 vibrant ones). Refined indigo brand accent (less neon). Emerald accent for CTAs (fresh, high-contrast). Tighter letter-spacing (-0.011em body, -0.025em headings). Sleeker panels (less glass blur, cleaner borders). VLM: 9/10 design + 9/10 coloration.
+- Deleted old use-voting.ts (replaced by .tsx).
+
+Verification (agent-browser 2-client via Caddy :81):
+- **Multi-round voting (the critical bug test)**: P1 created room → P2 joined → Vote #1 (P1:S, P2:A, 2/2 voted, ended, both closed) → Vote #2 (P1:A, P2:S, 2/2 voted, ended, both closed) → Vote #3 (started, both saw overlay, cancelled, both closed). THREE consecutive vote rounds worked flawlessly — the "breaks after first item" bug is FIXED.
+- Items placed correctly after each vote (Arcade Night + Street Tacos landed in S tier).
+- Both clients see overlay simultaneously. Cancel works.
+- Design VLM: desktop 9/10, mobile 9/10. "Sleek, production-ready, refined coloration."
+- Lint clean. Both services running (:3000, :3003).
+
+Stage Summary:
+- FIXED: voting breaks after first item (root cause: multiple useVoting instances → converted to context provider).
+- FIXED: voting doesn't work with multiple users (same root cause).
+- IMPROVED: connection stability (disconnect detection, reconnect with vote resync).
+- IMPROVED: speed (refs instead of deps, throttled focus/presence, debounced board).
+- NEW: winner celebration overlay with trophy + sparkles + tally bars.
+- NEW: focus highlights (see where others are hovering via colored ring + avatar).
+- NEW: animated vote bars on tier buttons.
+- NEW: soft-delete to unranked with undo.
+- IMPROVED: longer tier names (28 chars, auto-scaling font).
+- REDESIGNED: "Slate" theme — sleek, production-ready, refined.

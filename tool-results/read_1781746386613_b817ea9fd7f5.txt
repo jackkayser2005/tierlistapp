@@ -1,0 +1,936 @@
+     1→     1→/**
+     2→     2→ * RankForge Room Service  —  Real-time collaborative tier-list server.
+     3→     3→ * --------------------------------------------------------------
+     4→     4→ * Standalone socket.io mini-service that powers real-time collaboration
+     5→     5→ * on a shared RankForge tier-list board. Supports up to 10 users per room
+     6→     6→ * with presence, identity, activity log, heartbeats, idempotency (seq),
+     7→     7→ * and reconnection resync.
+     8→     8→ *
+     9→     9→ * Runs on a FIXED port 3003. The Next.js frontend connects via the Caddy
+    10→    10→ * gateway using `io("/?XTransformPort=3003")` — the gateway forwards based
+    11→    11→ * on that query param, so we just bind :3003 and accept all origins.
+    12→    12→ *
+    13→    13→ * State is in-memory only (no database). Rooms are dropped on restart.
+    14→    14→ *
+    15→    15→ * Lifecycle:
+    16→    16→ *   1. Client connects (socket established, but no user yet).
+    17→    17→ *   2. Client emits `identity` { name, color }   -> stored on socket.data.
+    18→    18→ *   3. Client emits `room:join` { roomId, board? } -> becomes a full member.
+    19→    19→ *   4. Client emits `heartbeat` every ~20s        -> refreshes lastSeen.
+    20→    20→ *   5. Server sweeps every 15s; any member with lastSeen > 45s is force-
+    21→    21→ *      disconnected (reclaims dead sessions).
+    22→    22→ *   6. On disconnect: member removed, presence re-broadcast, host promoted
+    23→    23→ *      (first remaining by Map insertion order), active vote scrubbed,
+    24→    24→ *      "left" activity logged.
+    25→    25→ *
+    26→    26→ * seq numbers: every state-changing broadcast (board:update relay, vote:state,
+    27→    27→ * vote:result, presence:update, activity:new) increments `room.seq` and
+    28→    28→ * includes the new seq in its payload. Clients use this as a monotonic
+    29→    29→ * ordering signal for reconciliation / gap detection.
+    30→    30→ *
+    31→    31→ * Idempotency: `board:update` carries an optional `eventId`. The server does
+    32→    32→ * NOT dedupe by eventId (full-board sync is inherently idempotent), but it
+    33→    33→ * relays `{ board, seq, eventId }` so clients can skip their own echo
+    34→    34→ * (match eventId) and detect gaps (seq).
+    35→    35→ */
+    36→    36→
+    37→    37→import { createServer } from 'node:http'
+    38→    38→import { Server, type Socket } from 'socket.io'
+    39→    39→
+    40→    40→// ---------------------------------------------------------------------------
+    41→    41→// Types
+    42→    42→// ---------------------------------------------------------------------------
+    43→    43→
+    44→    44→/** Minimal shape of a board payload — treated as an opaque JSON object. */
+    45→    45→type Board = Record<string, unknown> | null
+    46→    46→
+    47→    47→/** A user present in a room. `id` is the socket id (unique per connection). */
+    48→    48→interface User {
+    49→    49→  id: string // socket id
+    50→    50→  name: string // display name, max 20 chars
+    51→    51→  color: string // hex color for avatar, e.g. "#f43f5e"
+    52→    52→  presence: 'online' | 'idle' | 'dragging' | 'voting'
+    53→    53→  lastSeen: number // epoch ms, updated on heartbeat / activity
+    54→    54→}
+    55→    55→
+    56→    56→/** A single line in the room activity log. */
+    57→    57→interface ActivityEntry {
+    58→    58→  id: string // unique id (crypto.randomUUID with fallback)
+    59→    59→  userId: string
+    60→    60→  userName: string
+    61→    61→  action:
+    62→    62→    | 'joined'
+    63→    63→    | 'left'
+    64→    64→    | 'added'
+    65→    65→    | 'moved'
+    66→    66→    | 'deleted'
+    67→    67→    | 'vote_started'
+    68→    68→    | 'voted'
+    69→    69→    | 'vote_ended'
+    70→    70→    | 'vote_cancelled'
+    71→    71→  detail: string // human-readable, e.g. "Street Tacos to A", "S for Arcade Night"
+    72→    72→  ts: number // epoch ms
+    73→    73→}
+    74→    74→
+    75→    75→/** Active vote on a single item. `votes` maps voter socket id -> chosen tierId. */
+    76→    76→interface VoteState {
+    77→    77→  itemId: string
+    78→    78→  item: Record<string, unknown>
+    79→    79→  votes: Map<string, string> // socketId -> tierId
+    80→    80→  startedBy: string // socket id of the host who started it
+    81→    81→}
+    82→    82→
+    83→    83→/** Full per-room state. */
+    84→    84→interface RoomState {
+    85→    85→  /** socket id -> User. Map preserves insertion order = join order. */
+    86→    86→  members: Map<string, User>
+    87→    87→  /** socket id of the room host (first joiner); promoted on disconnect. */
+    88→    88→  host: string | null
+    89→    89→  /** latest board snapshot so late joiners can hydrate immediately. */
+    90→    90→  board: Board
+    91→    91→  /** active vote, if any; null when no vote is in progress. */
+    92→    92→  vote: VoteState | null
+    93→    93→  /** last 40 activity entries, newest last. */
+    94→    94→  activity: ActivityEntry[]
+    95→    95→  /** server sequence counter; increments on each state-changing broadcast. */
+    96→    96→  seq: number
+    97→    97→}
+    98→    98→
+    99→    99→// ---------------------------------------------------------------------------
+   100→   100→// Constants
+   101→   101→// ---------------------------------------------------------------------------
+   102→   102→
+   103→   103→/** Hard cap on members per room. */
+   104→   104→const MAX_MEMBERS = 10
+   105→   105→
+   106→   106→/** Activity log cap (last N entries kept). */
+   107→   107→const MAX_ACTIVITY = 40
+   108→   108→
+   109→   109→/** Heartbeat sweep interval (server-side reaper). */
+   110→   110→const HEARTBEAT_SWEEP_MS = 15_000
+   111→   111→
+   112→   112→/** A member is considered dead if no heartbeat for this long. */
+   113→   113→const HEARTBEAT_TIMEOUT_MS = 45_000
+   114→   114→
+   115→   115→/** Allowed presence states. */
+   116→   116→const PRESENCE_STATES = new Set(['online', 'idle', 'dragging', 'voting'])
+   117→   117→
+   118→   118→/** Allowed activity actions (for the client-driven `activity:log` event). */
+   119→   119→const ALLOWED_ACTIONS = new Set([
+   120→   120→  'joined',
+   121→   121→  'left',
+   122→   122→  'added',
+   123→   123→  'moved',
+   124→   124→  'deleted',
+   125→   125→  'vote_started',
+   126→   126→  'voted',
+   127→   127→  'vote_ended',
+   128→   128→  'vote_cancelled',
+   129→   129→])
+   130→   130→
+   131→   131→// ---------------------------------------------------------------------------
+   132→   132→// In-memory store
+   133→   133→// ---------------------------------------------------------------------------
+   134→   134→
+   135→   135→/** Map of roomId -> RoomState. No persistence; cleared on restart. */
+   136→   136→const rooms = new Map<string, RoomState>()
+   137→   137→
+   138→   138→/**
+   139→   139→ * Reverse index: socket id -> Set<roomId>. Lets us clean up efficiently on
+   140→   140→ * disconnect without scanning every room.
+   141→   141→ */
+   142→   142→const socketRooms = new Map<string, Set<string>>()
+   143→   143→
+   144→   144→// ---------------------------------------------------------------------------
+   145→   145→// Small utilities
+   146→   146→// ---------------------------------------------------------------------------
+   147→   147→
+   148→   148→/** Generate a unique id (crypto.randomUUID with safe fallback). */
+   149→   149→function uuid(): string {
+   150→   150→  try {
+   151→   151→    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+   152→   152→      return crypto.randomUUID()
+   153→   153→    }
+   154→   154→  } catch {
+   155→   155→    /* fall through */
+   156→   156→  }
+   157→   157→  return Math.random().toString(36).slice(2) + Date.now().toString(36)
+   158→   158→}
+   159→   159→
+   160→   160→/** Best-effort human label for an item object, falling back to itemId. */
+   161→   161→function itemLabel(item: Record<string, unknown> | null, fallback: string): string {
+   162→   162→  if (item && typeof item === 'object') {
+   163→   163→    if (typeof item.label === 'string' && item.label.trim()) return item.label.trim()
+   164→   164→    if (typeof item.name === 'string' && item.name.trim()) return item.name.trim()
+   165→   165→  }
+   166→   166→  return fallback
+   167→   167→}
+   168→   168→
+   169→   169→// ---------------------------------------------------------------------------
+   170→   170→// Room helpers
+   171→   171→// ---------------------------------------------------------------------------
+   172→   172→
+   173→   173→/** Get-or-create a RoomState for a given room id. */
+   174→   174→function getOrCreateRoom(roomId: string): RoomState {
+   175→   175→  let room = rooms.get(roomId)
+   176→   176→  if (!room) {
+   177→   177→    room = {
+   178→   178→      members: new Map<string, User>(),
+   179→   179→      host: null,
+   180→   180→      board: null,
+   181→   181→      vote: null,
+   182→   182→      activity: [],
+   183→   183→      seq: 0,
+   184→   184→    }
+   185→   185→    rooms.set(roomId, room)
+   186→   186→  }
+   187→   187→  return room
+   188→   188→}
+   189→   189→
+   190→   190→/** Number of peers currently connected to a room (0 if room does not exist). */
+   191→   191→function peerCount(roomId: string): number {
+   192→   192→  return rooms.get(roomId)?.members.size ?? 0
+   193→   193→}
+   194→   194→
+   195→   195→/** Track which rooms a socket has joined (for fast disconnect cleanup). */
+   196→   196→function rememberRoom(socketId: string, roomId: string): void {
+   197→   197→  let set = socketRooms.get(socketId)
+   198→   198→  if (!set) {
+   199→   199→    set = new Set<string>()
+   200→   200→    socketRooms.set(socketId, set)
+   201→   201→  }
+   202→   202→  set.add(roomId)
+   203→   203→}
+   204→   204→
+   205→   205→/**
+   206→   206→ * Remove a socket from a room and clean up the reverse index. If the host
+   207→   207→ * left, promote the first remaining member by Map insertion order (which is
+   208→   208→ * the join order). Does NOT broadcast — the caller is responsible for that.
+   209→   209→ */
+   210→   210→function forgetRoom(socketId: string, roomId: string): void {
+   211→   211→  const room = rooms.get(roomId)
+   212→   212→  if (room) {
+   213→   213→    room.members.delete(socketId)
+   214→   214→    if (room.host === socketId) {
+   215→   215→      // Promote the first remaining member by insertion order.
+   216→   216→      const next = room.members.size > 0 ? (room.members.keys().next().value ?? null) : null
+   217→   217→      room.host = next
+   218→   218→    }
+   219→   219→    // If empty, we keep the snapshot in memory so a quick reconnect restores
+   220→   220→    // state. The room Map entry stays around; that's fine for a mini-service.
+   221→   221→  }
+   222→   222→  socketRooms.get(socketId)?.delete(roomId)
+   223→   223→}
+   224→   224→
+   225→   225→/** Return the list of members in join order (Map insertion order). */
+   226→   226→function presenceList(room: RoomState): User[] {
+   227→   227→  return Array.from(room.members.values())
+   228→   228→}
+   229→   229→
+   230→   230→/** Return the last MAX_ACTIVITY activity entries (newest last). */
+   231→   231→function activityPayload(room: RoomState): ActivityEntry[] {
+   232→   232→  return room.activity.slice(-MAX_ACTIVITY)
+   233→   233→}
+   234→   234→
+   235→   235→/** Push an activity entry and cap the stored log at MAX_ACTIVITY. */
+   236→   236→function pushActivity(room: RoomState, entry: ActivityEntry): void {
+   237→   237→  room.activity.push(entry)
+   238→   238→  while (room.activity.length > MAX_ACTIVITY) {
+   239→   239→    room.activity.shift()
+   240→   240→  }
+   241→   241→}
+   242→   242→
+   243→   243→/** Increment and return the next sequence number for the room. */
+   244→   244→function nextSeq(room: RoomState): number {
+   245→   245→  return ++room.seq
+   246→   246→}
+   247→   247→
+   248→   248→// ---------------------------------------------------------------------------
+   249→   249→// Broadcast helpers
+   250→   250→// ---------------------------------------------------------------------------
+   251→   251→
+   252→   252→/**
+   253→   253→ * Broadcast `presence:update` to everyone in the room (including sender).
+   254→   254→ * Includes the member list, the current host id, and the new seq.
+   255→   255→ * (The `host` field lets clients update host badges after promotion.)
+   256→   256→ */
+   257→   257→function broadcastPresence(io: Server, room: RoomState, roomId: string): void {
+   258→   258→  const seq = nextSeq(room)
+   259→   259→  io.to(roomId).emit('presence:update', {
+   260→   260→    members: presenceList(room),
+   261→   261→    host: room.host,
+   262→   262→    seq,
+   263→   263→  })
+   264→   264→}
+   265→   265→
+   266→   266→/**
+   267→   267→ * Push an activity entry to the log, then broadcast `activity:new` to the
+   268→   268→ * whole room (including sender) with the new seq.
+   269→   269→ */
+   270→   270→function broadcastActivity(
+   271→   271→  io: Server,
+   272→   272→  room: RoomState,
+   273→   273→  roomId: string,
+   274→   274→  entry: ActivityEntry,
+   275→   275→): void {
+   276→   276→  pushActivity(room, entry)
+   277→   277→  const seq = nextSeq(room)
+   278→   278→  io.to(roomId).emit('activity:new', { entry, seq })
+   279→   279→}
+   280→   280→
+   281→   281→/** Build the vote:state payload to broadcast. tally is { tierId: count }. */
+   282→   282→function voteStatePayload(room: RoomState, seq?: number): {
+   283→   283→  active: boolean
+   284→   284→  itemId: string | null
+   285→   285→  item: Record<string, unknown> | null
+   286→   286→  tally: Record<string, number>
+   287→   287→  voterCount: number
+   288→   288→  totalPeers: number
+   289→   289→  seq: number
+   290→   290→} {
+   291→   291→  const vote = room.vote
+   292→   292→  const tally: Record<string, number> = {}
+   293→   293→  let voterCount = 0
+   294→   294→  if (vote) {
+   295→   295→    for (const tierId of vote.votes.values()) {
+   296→   296→      tally[tierId] = (tally[tierId] ?? 0) + 1
+   297→   297→      voterCount++
+   298→   298→    }
+   299→   299→  }
+   300→   300→  return {
+   301→   301→    active: !!vote,
+   302→   302→    itemId: vote?.itemId ?? null,
+   303→   303→    item: vote?.item ?? null,
+   304→   304→    tally,
+   305→   305→    voterCount,
+   306→   306→    totalPeers: room.members.size,
+   307→   307→    seq: seq ?? room.seq,
+   308→   308→  }
+   309→   309→}
+   310→   310→
+   311→   311→// ---------------------------------------------------------------------------
+   312→   312→// HTTP + Socket.IO server
+   313→   313→// ---------------------------------------------------------------------------
+   314→   314→
+   315→   315→// NOTE: we intentionally do NOT register a custom HTTP request handler here.
+   316→   316→// socket.io is configured with `path: '/'` below (required by the Caddy
+   317→   317→// gateway routing), which means engine.io owns every HTTP request to this
+   318→   318→// server. A custom /health route would be shadowed by engine.io, so we keep
+   319→   319→// the server bare and rely on socket.io's own handshake for liveness.
+   320→   320→const httpServer = createServer()
+   321→   321→
+   322→   322→const io = new Server(httpServer, {
+   323→   323→  // The Caddy gateway routes by path '/' + XTransformPort query param,
+   324→   324→  // so the socket.io path MUST be '/' to match the default.
+   325→   325→  path: '/',
+   326→   326→  cors: {
+   327→   327→    origin: '*',
+   328→   328→    methods: ['GET', 'POST'],
+   329→   329→  },
+   330→   330→  pingTimeout: 60000,
+   331→   331→  pingInterval: 25000,
+   332→   332→})
+   333→   333→
+   334→   334→// ---------------------------------------------------------------------------
+   335→   335→// Heartbeat sweep (server-side reaper)
+   336→   336→// ---------------------------------------------------------------------------
+   337→   337→
+   338→   338→/**
+   339→   339→ * Every HEARTBEAT_SWEEP_MS, iterate all rooms and force-disconnect any member
+   340→   340→ * whose `lastSeen` is older than HEARTBEAT_TIMEOUT_MS. The normal `disconnect`
+   341→   341→ * handler then takes care of cleanup (presence, host promotion, vote scrub,
+   342→   342→ * activity log). This reclaims dead sessions that the socket.io ping/pong
+   343→   343→ * layer might miss (e.g. half-open TCP).
+   344→   344→ */
+   345→   345→const heartbeatSweep = setInterval(() => {
+   346→   346→  try {
+   347→   347→    const now = Date.now()
+   348→   348→    for (const [roomId, room] of rooms) {
+   349→   349→      for (const [socketId, user] of room.members) {
+   350→   350→        const idle = now - user.lastSeen
+   351→   351→        if (idle > HEARTBEAT_TIMEOUT_MS) {
+   352→   352→          const s = io.sockets.sockets.get(socketId)
+   353→   353→          if (s && s.connected) {
+   354→   354→            console.log(
+   355→   355→              `[heartbeat] force-disconnect ${socketId} in ${roomId} (idle ${idle}ms)`,
+   356→   356→            )
+   357→   357→            // `true` = close the underlying connection. This triggers the
+   358→   358→            // normal `disconnect` handler, which cleans up state.
+   359→   359→            s.disconnect(true)
+   360→   360→          }
+   361→   361→        }
+   362→   362→      }
+   363→   363→    }
+   364→   364→  } catch (err) {
+   365→   365→    console.error('[heartbeat] sweep error:', err)
+   366→   366→  }
+   367→   367→}, HEARTBEAT_SWEEP_MS)
+   368→   368→
+   369→   369→// ---------------------------------------------------------------------------
+   370→   370→// Connection lifecycle
+   371→   371→// ---------------------------------------------------------------------------
+   372→   372→
+   373→   373→io.on('connection', (socket: Socket) => {
+   374→   374→  console.log(`[connect] ${socket.id}`)
+   375→   375→
+   376→   376→  // ----- identity --------------------------------------------------------
+   377→   377→  // Set display name + color on the socket. Does NOT join a room yet — the
+   378→   378→  // client must follow up with `room:join`. Until then the socket is a
+   379→   379→  // "pending" socket (connected but not a member of any room).
+   380→   380→  socket.on('identity', (payload: unknown) => {
+   381→   381→    try {
+   382→   382→      const data = (payload ?? {}) as { name?: string; color?: string }
+   383→   383→      let name = typeof data.name === 'string' ? data.name.trim().slice(0, 20) : ''
+   384→   384→      if (!name) name = 'Guest'
+   385→   385→      const color =
+   386→   386→        typeof data.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(data.color)
+   387→   387→          ? data.color
+   388→   388→          : '#64748b'
+   389→   389→      socket.data.identity = { name, color }
+   390→   390→      console.log(`[identity] ${socket.id} name=${name} color=${color}`)
+   391→   391→    } catch (err) {
+   392→   392→      console.error(`[identity] error from ${socket.id}:`, err)
+   393→   393→    }
+   394→   394→  })
+   395→   395→
+   396→   396→  // ----- room:join -------------------------------------------------------
+   397→   397→  // Join (or create) a room. Enforces the 10-user cap. Reads identity from
+   398→   398→  // socket.data (set via `identity` event; defaults to Guest/#64748b). Sends
+   399→   399→  // the joiner a full state bundle (room:state + presence:update +
+   400→   400→  // activity:sync + vote:state if active), then broadcasts presence + a
+   401→   401→  // "joined" activity to the room.
+   402→   402→  socket.on('room:join', (payload: unknown) => {
+   403→   403→    try {
+   404→   404→      const data = (payload ?? {}) as { roomId?: string; board?: Board }
+   405→   405→      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+   406→   406→      if (!roomId) {
+   407→   407→        socket.emit('room:error', { event: 'room:join', message: 'roomId is required' })
+   408→   408→        return
+   409→   409→      }
+   410→   410→
+   411→   411→      // 10-user cap: reject if the room is already full.
+   412→   412→      const existing = rooms.get(roomId)
+   413→   413→      if (existing && existing.members.size >= MAX_MEMBERS) {
+   414→   414→        socket.emit('room:error', {
+   415→   415→          event: 'room:join',
+   416→   416→          message: 'Room is full (max 10)',
+   417→   417→        })
+   418→   418→        return
+   419→   419→      }
+   420→   420→
+   421→   421→      // Leave any rooms this socket was previously in (a socket is in one
+   422→   422→      // RankForge room at a time). Broadcast presence:update + scrub any
+   423→   423→      // active vote from the old room.
+   424→   424→      const previous = socketRooms.get(socket.id)
+   425→   425→      if (previous && previous.size > 0) {
+   426→   426→        for (const oldRoomId of previous) {
+   427→   427→          const oldRoom = rooms.get(oldRoomId)
+   428→   428→          forgetRoom(socket.id, oldRoomId)
+   429→   429→          socket.leave(oldRoomId)
+   430→   430→          if (oldRoom) {
+   431→   431→            broadcastPresence(io, oldRoom, oldRoomId)
+   432→   432→            // If the switching user had voted on an active vote, drop it
+   433→   433→            // and re-broadcast the tally so the count is live.
+   434→   434→            if (oldRoom.vote && oldRoom.vote.votes.has(socket.id)) {
+   435→   435→              oldRoom.vote.votes.delete(socket.id)
+   436→   436→              io.to(oldRoomId).emit('vote:state', voteStatePayload(oldRoom, nextSeq(oldRoom)))
+   437→   437→            }
+   438→   438→          }
+   439→   439→        }
+   440→   440→      }
+   441→   441→
+   442→   442→      const room = getOrCreateRoom(roomId)
+   443→   443→      const wasNew = room.members.size === 0
+   444→   444→
+   445→   445→      // Read identity (set via `identity` event; default to Guest/#64748b).
+   446→   446→      const identity =
+   447→   447→        (socket.data?.identity as { name: string; color: string } | undefined) ?? {
+   448→   448→          name: 'Guest',
+   449→   449→          color: '#64748b',
+   450→   450→        }
+   451→   451→
+   452→   452→      const user: User = {
+   453→   453→        id: socket.id,
+   454→   454→        name: identity.name,
+   455→   455→        color: identity.color,
+   456→   456→        presence: 'online',
+   457→   457→        lastSeen: Date.now(),
+   458→   458→      }
+   459→   459→
+   460→   460→      socket.join(roomId)
+   461→   461→      room.members.set(socket.id, user)
+   462→   462→      rememberRoom(socket.id, roomId)
+   463→   463→
+   464→   464→      // First joiner (or recovered host-less room) becomes host.
+   465→   465→      if (wasNew || room.host === null) {
+   466→   466→        room.host = socket.id
+   467→   467→      }
+   468→   468→
+   469→   469→      // Update the stored snapshot if the client provided a board.
+   470→   470→      if (data.board !== undefined && data.board !== null) {
+   471→   471→        room.board = data.board
+   472→   472→      }
+   473→   473→
+   474→   474→      const isHost = room.host === socket.id
+   475→   475→
+   476→   476→      // 1. Full state bundle to the joiner.
+   477→   477→      socket.emit('room:state', {
+   478→   478→        roomId,
+   479→   479→        isHost,
+   480→   480→        peers: room.members.size,
+   481→   481→        board: room.board,
+   482→   482→        seq: room.seq,
+   483→   483→      })
+   484→   484→
+   485→   485→      // 2. Presence to the joiner (direct; uses current seq, no increment).
+   486→   486→      socket.emit('presence:update', {
+   487→   487→        members: presenceList(room),
+   488→   488→        host: room.host,
+   489→   489→        seq: room.seq,
+   490→   490→      })
+   491→   491→
+   492→   492→      // 3. Activity log to the joiner (last 40 entries).
+   493→   493→      socket.emit('activity:sync', { entries: activityPayload(room) })
+   494→   494→
+   495→   495→      // 4. If a vote is currently active, hydrate the joiner (no seq bump).
+   496→   496→      if (room.vote) {
+   497→   497→        socket.emit('vote:state', voteStatePayload(room))
+   498→   498→      }
+   499→   499→
+   500→   500→      // 5. Broadcast presence to the whole room (including joiner).
+   501→   501→      broadcastPresence(io, room, roomId)
+   502→   502→
+   503→   503→      // 6. Push + broadcast "joined" activity to the whole room.
+   504→   504→      broadcastActivity(io, room, roomId, {
+   505→   505→        id: uuid(),
+   506→   506→        userId: socket.id,
+   507→   507→        userName: user.name,
+   508→   508→        action: 'joined',
+   509→   509→        detail: user.name,
+   510→   510→        ts: Date.now(),
+   511→   511→      })
+   512→   512→
+   513→   513→      console.log(
+   514→   514→        `[room:join] ${socket.id} -> ${roomId} (peers=${room.members.size}, host=${isHost})`,
+   515→   515→      )
+   516→   516→    } catch (err) {
+   517→   517→      console.error(`[room:join] error from ${socket.id}:`, err)
+   518→   518→      socket.emit('room:error', { event: 'room:join', message: 'internal error' })
+   519→   519→    }
+   520→   520→  })
+   521→   521→
+   522→   522→  // ----- board:update ----------------------------------------------------
+   523→   523→  // A client changed its local board and wants to broadcast to peers.
+   524→   524→  // We store the snapshot AND relay to everyone else (NOT back to sender,
+   525→   525→  // since the sender already has the optimistic local state). Includes the
+   526→   526→  // new seq + the client-supplied eventId so peers can skip re-applying their
+   527→   527→  // own echo and detect gaps.
+   528→   528→  socket.on('board:update', (payload: unknown) => {
+   529→   529→    try {
+   530→   530→      const data = (payload ?? {}) as {
+   531→   531→        roomId?: string
+   532→   532→        board?: Board
+   533→   533→        eventId?: string
+   534→   534→      }
+   535→   535→      const roomId = typeof data.roomId === 'string' ? data.roomId : ''
+   536→   536→      if (!roomId || data.board === undefined || data.board === null) return
+   537→   537→
+   538→   538→      const room = rooms.get(roomId)
+   539→   539→      if (!room) return // must join before updating
+   540→   540→
+   541→   541→      room.board = data.board
+   542→   542→      const seq = nextSeq(room)
+   543→   543→      // Relay to OTHERS only (sender already has optimistic state).
+   544→   544→      socket.to(roomId).emit('board:update', {
+   545→   545→        board: data.board,
+   546→   546→        seq,
+   547→   547→        eventId: typeof data.eventId === 'string' ? data.eventId : undefined,
+   548→   548→      })
+   549→   549→    } catch (err) {
+   550→   550→      console.error(`[board:update] error from ${socket.id}:`, err)
+   551→   551→    }
+   552→   552→  })
+   553→   553→
+   554→   554→  // ----- activity:log ----------------------------------------------------
+   555→   555→  // Client-driven activity logging. The sender emits this right after a
+   556→   556→  // user-visible board action (add/move/delete) so the activity feed can say
+   557→   557→  // "Mason moved Street Tacos to A" without the server parsing board diffs
+   558→   558→  // (which is fragile). The server just validates, builds the entry, and
+   559→   559→  // broadcasts it to the whole room (including sender).
+   560→   560→  socket.on('activity:log', (payload: unknown) => {
+   561→   561→    try {
+   562→   562→      const data = (payload ?? {}) as { roomId?: string; action?: string; detail?: string }
+   563→   563→      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+   564→   564→      const action = typeof data.action === 'string' ? data.action : ''
+   565→   565→      const detail =
+   566→   566→        typeof data.detail === 'string' ? data.detail.trim().slice(0, 120) : ''
+   567→   567→      if (!roomId || !ALLOWED_ACTIONS.has(action)) return
+   568→   568→
+   569→   569→      const room = rooms.get(roomId)
+   570→   570→      if (!room) return
+   571→   571→      const user = room.members.get(socket.id)
+   572→   572→      if (!user) return
+   573→   573→
+   574→   574→      const entry: ActivityEntry = {
+   575→   575→        id: uuid(),
+   576→   576→        userId: socket.id,
+   577→   577→        userName: user.name,
+   578→   578→        action: action as ActivityEntry['action'],
+   579→   579→        detail,
+   580→   580→        ts: Date.now(),
+   581→   581→      }
+   582→   582→      broadcastActivity(io, room, roomId, entry)
+   583→   583→      console.log(`[activity:log] ${socket.id} ${action} "${detail}" in ${roomId}`)
+   584→   584→    } catch (err) {
+   585→   585→      console.error(`[activity:log] error from ${socket.id}:`, err)
+   586→   586→    }
+   587→   587→  })
+   588→   588→
+   589→   589→  // ----- presence:set ----------------------------------------------------
+   590→   590→  // Client tells the server its current fine-grained presence state (online /
+   591→   591→  // idle / dragging / voting). Clients should throttle this on their side.
+   592→   592→  // Server updates the user and re-broadcasts presence to the room.
+   593→   593→  socket.on('presence:set', (payload: unknown) => {
+   594→   594→    try {
+   595→   595→      const data = (payload ?? {}) as { roomId?: string; state?: string }
+   596→   596→      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+   597→   597→      const state = typeof data.state === 'string' ? data.state : ''
+   598→   598→      if (!roomId || !PRESENCE_STATES.has(state)) return
+   599→   599→
+   600→   600→      const room = rooms.get(roomId)
+   601→   601→      if (!room) return
+   602→   602→      const user = room.members.get(socket.id)
+   603→   603→      if (!user) return
+   604→   604→
+   605→   605→      user.presence = state as User['presence']
+   606→   606→      user.lastSeen = Date.now()
+   607→   607→      broadcastPresence(io, room, roomId)
+   608→   608→    } catch (err) {
+   609→   609→      console.error(`[presence:set] error from ${socket.id}:`, err)
+   610→   610→    }
+   611→   611→  })
+   612→   612→
+   613→   613→  // ----- heartbeat -------------------------------------------------------
+   614→   614→  // Client emits this every ~20s (no payload). Server refreshes the user's
+   615→   615→  // lastSeen across all rooms they're in. The server-side sweep uses
+   616→   616→  // lastSeen to decide who to force-disconnect.
+   617→   617→  socket.on('heartbeat', () => {
+   618→   618→    try {
+   619→   619→      const joined = socketRooms.get(socket.id)
+   620→   620→      if (!joined || joined.size === 0) return
+   621→   621→      const now = Date.now()
+   622→   622→      for (const roomId of joined) {
+   623→   623→        const room = rooms.get(roomId)
+   624→   624→        const user = room?.members.get(socket.id)
+   625→   625→        if (user) user.lastSeen = now
+   626→   626→      }
+   627→   627→    } catch (err) {
+   628→   628→      console.error(`[heartbeat] error from ${socket.id}:`, err)
+   629→   629→    }
+   630→   630→  })
+   631→   631→
+   632→   632→  // ----- board:sync-request ---------------------------------------------
+   633→   633→  // A freshly-joined client asks for the current board. We reply directly
+   634→   634→  // to the requester with whatever snapshot we have (or null if none).
+   635→   635→  socket.on('board:sync-request', (payload: unknown) => {
+   636→   636→    try {
+   637→   637→      const data = (payload ?? {}) as { roomId?: string }
+   638→   638→      const roomId = typeof data.roomId === 'string' ? data.roomId : ''
+   639→   639→      const room = roomId ? rooms.get(roomId) : undefined
+   640→   640→
+   641→   641→      socket.emit('board:sync', {
+   642→   642→        roomId,
+   643→   643→        board: room ? room.board : null,
+   644→   644→      })
+   645→   645→    } catch (err) {
+   646→   646→      console.error(`[board:sync-request] error from ${socket.id}:`, err)
+   647→   647→    }
+   648→   648→  })
+   649→   649→
+   650→   650→  // ----- vote:sync-request ----------------------------------------------
+   651→   651→  // A freshly-joined (or reconnecting) client asks for the current vote state
+   652→   652→  // so it can show the voting overlay if a vote is in progress. We reply
+   653→   653→  // directly to the requester (no seq bump — hydration only).
+   654→   654→  socket.on('vote:sync-request', (payload: unknown) => {
+   655→   655→    try {
+   656→   656→      const data = (payload ?? {}) as { roomId?: string }
+   657→   657→      const roomId = typeof data.roomId === 'string' ? data.roomId : ''
+   658→   658→      const room = roomId ? rooms.get(roomId) : undefined
+   659→   659→      socket.emit(
+   660→   660→        'vote:state',
+   661→   661→        room
+   662→   662→          ? voteStatePayload(room)
+   663→   663→          : {
+   664→   664→              active: false,
+   665→   665→              itemId: null,
+   666→   666→              item: null,
+   667→   667→              tally: {},
+   668→   668→              voterCount: 0,
+   669→   669→              totalPeers: 0,
+   670→   670→              seq: 0,
+   671→   671→            },
+   672→   672→      )
+   673→   673→    } catch (err) {
+   674→   674→      console.error(`[vote:sync-request] error from ${socket.id}:`, err)
+   675→   675→    }
+   676→   676→  })
+   677→   677→
+   678→   678→  // ----- vote:start ------------------------------------------------------
+   679→   679→  // Host kicks off a vote on a specific item. The item "pops up" for everyone
+   680→   680→  // in the room; each peer then casts one vote for a tier via `vote:cast`.
+   681→   681→  // Also logs a "vote_started" activity entry.
+   682→   682→  socket.on('vote:start', (payload: unknown) => {
+   683→   683→    try {
+   684→   684→      const data = (payload ?? {}) as {
+   685→   685→        roomId?: string
+   686→   686→        itemId?: string
+   687→   687→        item?: Record<string, unknown>
+   688→   688→      }
+   689→   689→      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+   690→   690→      const itemId = typeof data.itemId === 'string' ? data.itemId.trim() : ''
+   691→   691→      if (
+   692→   692→        !roomId ||
+   693→   693→        !itemId ||
+   694→   694→        typeof data.item !== 'object' ||
+   695→   695→        data.item === null ||
+   696→   696→        Array.isArray(data.item)
+   697→   697→      ) {
+   698→   698→        socket.emit('room:error', {
+   699→   699→          event: 'vote:start',
+   700→   700→          message: 'roomId (string), itemId (string) and item (object) are required',
+   701→   701→        })
+   702→   702→        return
+   703→   703→      }
+   704→   704→
+   705→   705→      const room = rooms.get(roomId)
+   706→   706→      if (!room) {
+   707→   707→        socket.emit('room:error', { event: 'vote:start', message: 'room not found' })
+   708→   708→        return
+   709→   709→      }
+   710→   710→      if (room.host !== socket.id) {
+   711→   711→        socket.emit('room:error', { event: 'vote:start', message: 'only host can start a vote' })
+   712→   712→        return
+   713→   713→      }
+   714→   714→
+   715→   715→      room.vote = {
+   716→   716→        itemId,
+   717→   717→        item: data.item,
+   718→   718→        votes: new Map<string, string>(),
+   719→   719→        startedBy: socket.id,
+   720→   720→      }
+   721→   721→
+   722→   722→      io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))
+   723→   723→
+   724→   724→      // NOTE: vote_started activity is sent by the client via activity:log
+   725→   725→      // (the client has the readable item label; we don't duplicate it here).
+   726→   726→
+   727→   727→      console.log(`[vote:start] ${socket.id} -> ${roomId} item=${itemId}`)
+   728→   728→    } catch (err) {
+   729→   729→      console.error(`[vote:start] error from ${socket.id}:`, err)
+   730→   730→      socket.emit('room:error', { event: 'vote:start', message: 'internal error' })
+   731→   731→    }
+   732→   732→  })
+   733→   733→
+   734→   734→  // ----- vote:cast --------------------------------------------------------
+   735→   735→  // A peer casts (or re-casts) their vote for a tier on the active item.
+   736→   736→  // Stale votes (wrong itemId / no active vote) are ignored silently.
+   737→   737→  // Also logs a "voted" activity entry (detail = "<item label> -> <tierId>").
+   738→   738→  socket.on('vote:cast', (payload: unknown) => {
+   739→   739→    try {
+   740→   740→      const data = (payload ?? {}) as {
+   741→   741→        roomId?: string
+   742→   742→        itemId?: string
+   743→   743→        tierId?: string
+   744→   744→      }
+   745→   745→      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+   746→   746→      const itemId = typeof data.itemId === 'string' ? data.itemId.trim() : ''
+   747→   747→      const tierId = typeof data.tierId === 'string' ? data.tierId.trim() : ''
+   748→   748→      if (!roomId || !itemId || !tierId) return
+   749→   749→
+   750→   750→      const room = rooms.get(roomId)
+   751→   751→      if (!room || !room.vote) return
+   752→   752→      if (room.vote.itemId !== itemId) return // stale vote
+   753→   753→
+   754→   754→      room.vote.votes.set(socket.id, tierId)
+   755→   755→      io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))
+   756→   756→
+   757→   757→      // NOTE: voted activity is sent by the client via activity:log
+   758→   758→      // (the client formats it as "S for Arcade Night" which is more readable).
+   759→   759→
+   760→   760→      console.log(`[vote:cast] ${socket.id} voted ${tierId} in ${roomId}`)
+   761→   761→    } catch (err) {
+   762→   762→      console.error(`[vote:cast] error from ${socket.id}:`, err)
+   763→   763→    }
+   764→   764→  })
+   765→   765→
+   766→   766→  // ----- vote:end ---------------------------------------------------------
+   767→   767→  // Host ends the active vote. Winner = tierId with the highest count; ties
+   768→   768→  // broken by ascending alphabetical tierId (deterministic). If no votes were
+   769→   769→  // cast, winner = null. Emits `vote:result` then a final inactive `vote:state`
+   770→   770→  // so clients close the overlay. Also logs a "vote_ended" activity.
+   771→   771→  socket.on('vote:end', (payload: unknown) => {
+   772→   772→    try {
+   773→   773→      const data = (payload ?? {}) as { roomId?: string }
+   774→   774→      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+   775→   775→      if (!roomId) return
+   776→   776→
+   777→   777→      const room = rooms.get(roomId)
+   778→   778→      if (!room || !room.vote) return
+   779→   779→
+   780→   780→      if (room.host !== socket.id) {
+   781→   781→        socket.emit('room:error', { event: 'vote:end', message: 'only host can end a vote' })
+   782→   782→        return
+   783→   783→      }
+   784→   784→
+   785→   785→      const vote = room.vote
+   786→   786→      const tally: Record<string, number> = {}
+   787→   787→      let winner: string | null = null
+   788→   788→      let bestCount = -1
+   789→   789→      // Iterating tierIds in sorted order gives deterministic tie-breaking:
+   790→   790→      // the alphabetically-first tierId wins on a tie (strict > keeps the
+   791→   791→      // earliest-seen leading candidate).
+   792→   792→      const sortedTierIds = Array.from(vote.votes.values()).sort()
+   793→   793→      for (const tierId of sortedTierIds) {
+   794→   794→        const count = (tally[tierId] ?? 0) + 1
+   795→   795→        tally[tierId] = count
+   796→   796→        if (count > bestCount) {
+   797→   797→          bestCount = count
+   798→   798→          winner = tierId
+   799→   799→        }
+   800→   800→      }
+   801→   801→      if (vote.votes.size === 0) winner = null
+   802→   802→
+   803→   803→      io.to(roomId).emit('vote:result', {
+   804→   804→        itemId: vote.itemId,
+   805→   805→        tally,
+   806→   806→        winner,
+   807→   807→        seq: nextSeq(room),
+   808→   808→      })
+   809→   809→
+   810→   810→      room.vote = null
+   811→   811→      io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))
+   812→   812→
+   813→   813→      // NOTE: vote_ended activity is sent by the client via activity:log.
+   814→   814→
+   815→   815→      console.log(`[vote:end] ${socket.id} -> ${roomId} winner=${winner}`)
+   816→   816→    } catch (err) {
+   817→   817→      console.error(`[vote:end] error from ${socket.id}:`, err)
+   818→   818→      socket.emit('room:error', { event: 'vote:end', message: 'internal error' })
+   819→   819→    }
+   820→   820→  })
+   821→   821→
+   822→   822→  // ----- vote:cancel ------------------------------------------------------
+   823→   823→  // Host cancels the active vote without announcing a winner. Just clears
+   824→   824→  // state and broadcasts an inactive `vote:state`. Also logs a
+   825→   825→  // "vote_cancelled" activity.
+   826→   826→  socket.on('vote:cancel', (payload: unknown) => {
+   827→   827→    try {
+   828→   828→      const data = (payload ?? {}) as { roomId?: string }
+   829→   829→      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+   830→   830→      if (!roomId) return
+   831→   831→
+   832→   832→      const room = rooms.get(roomId)
+   833→   833→      if (!room) return
+   834→   834→
+   835→   835→      if (room.host !== socket.id) {
+   836→   836→        socket.emit('room:error', { event: 'vote:cancel', message: 'only host can cancel a vote' })
+   837→   837→        return
+   838→   838→      }
+   839→   839→
+   840→   840→      const wasItemId = room.vote?.itemId ?? ''
+   841→   841→      room.vote = null
+   842→   842→      io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))
+   843→   843→
+   844→   844→      // NOTE: vote_cancelled activity is sent by the client via activity:log.
+   845→   845→
+   846→   846→      console.log(`[vote:cancel] ${socket.id} -> ${roomId}`)
+   847→   847→    } catch (err) {
+   848→   848→      console.error(`[vote:cancel] error from ${socket.id}:`, err)
+   849→   849→      socket.emit('room:error', { event: 'vote:cancel', message: 'internal error' })
+   850→   850→    }
+   851→   851→  })
+   852→   852→
+   853→   853→  // ----- disconnect ------------------------------------------------------
+   854→   854→  // Remove the socket from every room it was in. For each affected room:
+   855→   855→  //   - re-broadcast presence (with the possibly-new host),
+   856→   856→  //   - push + broadcast a "left" activity,
+   857→   857→  //   - if the user had voted on an active vote, scrub it and re-broadcast.
+   858→   858→  // Finally clear the socket's identity.
+   859→   859→  socket.on('disconnect', (reason: string) => {
+   860→   860→    try {
+   861→   861→      const joined = socketRooms.get(socket.id)
+   862→   862→      if (joined) {
+   863→   863→        for (const roomId of joined) {
+   864→   864→          const room = rooms.get(roomId)
+   865→   865→          // Capture the user BEFORE forgetRoom mutates the members Map.
+   866→   866→          const user = room?.members.get(socket.id)
+   867→   867→
+   868→   868→          forgetRoom(socket.id, roomId)
+   869→   869→          socket.leave(roomId)
+   870→   870→
+   871→   871→          if (room) {
+   872→   872→            // 1. Broadcast updated presence (includes new host id, if promoted).
+   873→   873→            broadcastPresence(io, room, roomId)
+   874→   874→
+   875→   875→            // 2. Push + broadcast "left" activity.
+   876→   876→            if (user) {
+   877→   877→              broadcastActivity(io, room, roomId, {
+   878→   878→                id: uuid(),
+   879→   879→                userId: socket.id,
+   880→   880→                userName: user.name,
+   881→   881→                action: 'left',
+   882→   882→                detail: user.name,
+   883→   883→                ts: Date.now(),
+   884→   884→              })
+   885→   885→            }
+   886→   886→
+   887→   887→            // 3. If the disconnected user had voted on the active vote, drop
+   888→   888→            //    their vote and re-broadcast the tally so the count is live.
+   889→   889→            if (room.vote && room.vote.votes.has(socket.id)) {
+   890→   890→              room.vote.votes.delete(socket.id)
+   891→   891→              io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))
+   892→   892→            }
+   893→   893→          }
+   894→   894→        }
+   895→   895→        socketRooms.delete(socket.id)
+   896→   896→      }
+   897→   897→
+   898→   898→      // Clear identity (forces re-identity on reconnect if socket is reused).
+   899→   899→      socket.data.identity = undefined
+   900→   900→
+   901→   901→      console.log(`[disconnect] ${socket.id} (${reason})`)
+   902→   902→    } catch (err) {
+   903→   903→      console.error(`[disconnect] error from ${socket.id}:`, err)
+   904→   904→    }
+   905→   905→  })
+   906→   906→
+   907→   907→  socket.on('error', (err: Error) => {
+   908→   908→    console.error(`[socket-error] ${socket.id}:`, err)
+   909→   909→  })
+   910→   910→})
+   911→   911→
+   912→   912→// ---------------------------------------------------------------------------
+   913→   913→// Boot
+   914→   914→// ---------------------------------------------------------------------------
+   915→   915→
+   916→   916→const PORT = 3003
+   917→   917→httpServer.listen(PORT, () => {
+   918→   918→  console.log(`room-service on :${PORT}`)
+   919→   919→})
+   920→   920→
+   921→   921→// Graceful shutdown so `bun --hot` restarts don't leave dangling sockets or
+   922→   922→// a dangling heartbeat interval.
+   923→   923→function shutdown(signal: string): void {
+   924→   924→  console.log(`[${signal}] shutting down room-service...`)
+   925→   925→  clearInterval(heartbeatSweep)
+   926→   926→  io.close(() => {
+   927→   927→    httpServer.close(() => {
+   928→   928→      console.log('room-service closed')
+   929→   929→      process.exit(0)
+   930→   930→    })
+   931→   931→  })
+   932→   932→}
+   933→   933→
+   934→   934→process.on('SIGTERM', () => shutdown('SIGTERM'))
+   935→   935→process.on('SIGINT', () => shutdown('SIGINT'))
+   936→   936→

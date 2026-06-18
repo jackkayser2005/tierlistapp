@@ -11,6 +11,14 @@ import { toast } from "sonner";
 export type ConnectionStatus = "disconnected" | "connecting" | "connected";
 export type PresenceState = "online" | "idle" | "dragging" | "voting";
 
+export interface FocusInfo {
+  userId: string;
+  userName: string;
+  userColor: string;
+  itemId: string;
+  ts: number;
+}
+
 export interface MultiplayerState {
   status: ConnectionStatus;
   roomId: string | null;
@@ -19,6 +27,7 @@ export interface MultiplayerState {
   members: RoomUser[];
   hostId: string | null;
   activity: ActivityEntry[];
+  focuses: Record<string, FocusInfo>; // itemId -> FocusInfo
 }
 
 interface ServerRoomState {
@@ -86,6 +95,8 @@ interface MultiplayerContextValue extends MultiplayerState {
   shareUrl: string | null;
   setPresence: (state: PresenceState) => void;
   logActivity: (action: ActivityAction, detail: string) => void;
+  setFocus: (itemId: string) => void;
+  clearFocus: () => void;
 }
 
 const MultiplayerContext = React.createContext<MultiplayerContextValue>({
@@ -96,6 +107,7 @@ const MultiplayerContext = React.createContext<MultiplayerContextValue>({
   members: [],
   hostId: null,
   activity: [],
+  focuses: {},
   hydrated: false,
   user: { id: "", name: "Guest", color: "#64748b" },
   updateUser: () => {},
@@ -117,7 +129,9 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     members: [],
     hostId: null,
     activity: [],
+    focuses: {},
   });
+  const focusTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const [user, setUser] = React.useState<LocalUser>({
     id: "",
@@ -224,13 +238,26 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     const u = getLocalUser();
     sock.emit("identity", { name: u.name, color: u.color });
 
+    // Track connection state for UI feedback.
+    sock.off("disconnect").on("disconnect", () => {
+      setState((s) =>
+        s.status === "connected"
+          ? { ...s, status: "connecting" }
+          : s
+      );
+    });
+
     // Reconnect handler — re-emit identity, then rejoin if we had a room.
     sock.io.off("reconnect").on("reconnect", () => {
       const u2 = getLocalUser();
       sock.emit("identity", { name: u2.name, color: u2.color });
       const currentRoom = getRoomFromUrl();
       if (currentRoom) {
+        // Re-join without sending our board (server has the authoritative one).
+        // Listeners are already attached from the original joinRoom call.
         sock.emit("room:join", { roomId: currentRoom });
+        // Request fresh vote state in case a vote is active.
+        sock.emit("vote:sync-request", { roomId: currentRoom });
       }
     });
 
@@ -308,6 +335,34 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
           return { ...s, activity: next };
         });
       });
+      // Focus relay — other users hovering/dragging items.
+      sock.off("focus:set").on("focus:set", (payload: FocusInfo) => {
+        if (!payload?.itemId || !payload?.userId) return;
+        setState((s) => ({
+          ...s,
+          focuses: { ...s.focuses, [payload.itemId]: payload },
+        }));
+        const key = payload.itemId;
+        if (focusTimersRef.current[key]) clearTimeout(focusTimersRef.current[key]);
+        focusTimersRef.current[key] = setTimeout(() => {
+          setState((s) => {
+            const next = { ...s.focuses };
+            delete next[key];
+            return { ...s, focuses: next };
+          });
+          delete focusTimersRef.current[key];
+        }, 4000);
+      });
+      sock.off("focus:clear").on("focus:clear", (payload: { userId: string }) => {
+        if (!payload?.userId) return;
+        setState((s) => {
+          const next = { ...s.focuses };
+          for (const k of Object.keys(next)) {
+            if (next[k].userId === payload.userId) delete next[k];
+          }
+          return { ...s, focuses: next };
+        });
+      });
 
       const board = asHost ? snapshotBoard(useRankForge.getState()) : undefined;
       sock.emit("room:join", { roomId, board });
@@ -363,6 +418,27 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     }
   }, []);
 
+  // ---- Focus (throttled, ephemeral) ----
+  const lastFocusRef = React.useRef<string>("");
+  const focusThrottleRef = React.useRef<number>(0);
+  const setFocus = React.useCallback((itemId: string) => {
+    if (itemId === lastFocusRef.current) return;
+    lastFocusRef.current = itemId;
+    const now = Date.now();
+    if (now - focusThrottleRef.current < 250) return;
+    focusThrottleRef.current = now;
+    const sock = getSocket();
+    const roomId = getRoomFromUrl();
+    if (sock && roomId) sock.emit("focus:set", { roomId, itemId });
+  }, []);
+  const clearFocus = React.useCallback(() => {
+    if (!lastFocusRef.current) return;
+    lastFocusRef.current = "";
+    const sock = getSocket();
+    const roomId = getRoomFromUrl();
+    if (sock && roomId) sock.emit("focus:clear", { roomId });
+  }, []);
+
   // ---- Cleanup on unmount ----
   React.useEffect(() => {
     return () => {
@@ -414,8 +490,10 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       shareUrl,
       setPresence,
       logActivity,
+      setFocus,
+      clearFocus,
     }),
-    [state, hydrated, user, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity]
+    [state, hydrated, user, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity, setFocus, clearFocus]
   );
 
   return (
