@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Trash2, Pencil, ImageOff, CornerDownLeft } from "lucide-react";
+import { Trash2, Pencil, ImageOff, CornerDownLeft, UserPlus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,9 @@ interface CardViewProps {
   dragging?: boolean;
   focusColor?: string;
   focusName?: string;
+  assignedAvatarUrl?: string;
+  assignedAvatarColor?: string;
+  assignedAvatarName?: string;
 }
 
 /** Pure presentational card — used in the board and the drag overlay. */
@@ -40,6 +43,9 @@ function ItemCardView({
   dragging,
   focusColor,
   focusName,
+  assignedAvatarUrl,
+  assignedAvatarColor,
+  assignedAvatarName,
 }: CardViewProps) {
   const [imgError, setImgError] = React.useState(false);
   const showImage = item.type === "image" && item.imageUrl && !imgError;
@@ -108,6 +114,29 @@ function ItemCardView({
           {initials(focusName)}
         </div>
       ) : null}
+
+      {/* assigned-user badge (bottom-left) */}
+      {assignedAvatarColor ? (
+        <div
+          className="pointer-events-none absolute -bottom-1 -left-1 size-5 overflow-hidden rounded-full border-2 border-background shadow-md"
+          title={`Assigned to ${assignedAvatarName ?? ""}`}
+        >
+          {assignedAvatarUrl ? (
+            <img
+              src={assignedAvatarUrl}
+              alt={assignedAvatarName ?? ""}
+              className="size-full object-cover"
+            />
+          ) : (
+            <div
+              className="grid size-full place-items-center text-[9px] font-bold text-white"
+              style={{ backgroundColor: assignedAvatarColor }}
+            >
+              {assignedAvatarName ? initials(assignedAvatarName) : "?"}
+            </div>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -131,9 +160,14 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
   const moveItem = useRankForge((s) => s.moveItem);
   const findContainerOf = useRankForge((s) => s.findContainerOf);
   const updateItemLabel = useRankForge((s) => s.updateItemLabel);
+  const assignItem = useRankForge((s) => s.assignItem);
   const { votingMode } = useVotingMode();
-  const { focuses, setFocus, clearFocus, status } = useMultiplayer();
+  const { focuses, setFocus, clearFocus, status, members } = useMultiplayer();
+  const assignedMember = item.assignedUserId
+    ? members.find((m) => m.id === item.assignedUserId)
+    : undefined;
   const [editOpen, setEditOpen] = React.useState(false);
+  const [assignOpen, setAssignOpen] = React.useState(false);
   const [draft, setDraft] = React.useState(item.label);
 
   React.useEffect(() => {
@@ -205,6 +239,8 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
           item={item}
           focusColor={focusColor}
           focusName={focusName}
+          assignedAvatarColor={assignedMember?.color}
+          assignedAvatarName={assignedMember?.name}
         />
       </div>
 
@@ -269,6 +305,65 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
             </div>
           </PopoverContent>
         </Popover>
+
+        {status === "connected" && members.length > 0 ? (
+          <Popover open={assignOpen} onOpenChange={setAssignOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                size="icon"
+                variant="secondary"
+                className={cn(
+                  "size-6 rounded-full border border-white/10 bg-background/95 shadow-md backdrop-blur hover:bg-background",
+                  item.assignedUserId && "ring-2 ring-emerald-400/50"
+                )}
+                aria-label={`Assign ${item.label} to a user`}
+              >
+                <UserPlus className="size-3" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-52 p-2" align="end">
+              <div className="space-y-1">
+                <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
+                  Assign to
+                </p>
+                {item.assignedUserId ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start text-destructive hover:text-destructive"
+                    onClick={() => {
+                      assignItem(item.id, undefined);
+                      setAssignOpen(false);
+                    }}
+                  >
+                    <X className="size-3.5" /> Unassign
+                  </Button>
+                ) : null}
+                {members.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => {
+                      assignItem(item.id, m.id);
+                      setAssignOpen(false);
+                    }}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-white/[0.06]",
+                      item.assignedUserId === m.id && "bg-white/[0.04]"
+                    )}
+                  >
+                    <span
+                      className="grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white"
+                      style={{ backgroundColor: m.color }}
+                    >
+                      {initials(m.name)}
+                    </span>
+                    <span className="truncate">{m.name}</span>
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+        ) : null}
 
         <Button
           size="icon"

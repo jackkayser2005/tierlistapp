@@ -8,6 +8,8 @@ export interface TierItem {
   label: string;
   /** Present only for image items. May be a remote URL or a local /public path. */
   imageUrl?: string;
+  /** The room user id this item is "owned" by (for leaderboard scoring). */
+  assignedUserId?: string;
 }
 
 export interface Tier {
@@ -15,6 +17,8 @@ export interface Tier {
   name: string;
   /** Hex color string, e.g. "#ef4444". */
   color: string;
+  /** Points awarded for items placed in this tier (for leaderboard). */
+  points: number;
 }
 
 /** Special container id used for the unranked pool. */
@@ -70,6 +74,15 @@ const DEFAULT_TIER_COLORS: Record<string, string> = {
   D: "#475569",
 };
 
+/** Default points for the standard 5-tier layout (S=5 … D=1). */
+const DEFAULT_TIER_POINTS: Record<string, number> = {
+  S: 5,
+  A: 4,
+  B: 3,
+  C: 2,
+  D: 1,
+};
+
 function makeId(prefix: string): string {
   // Compact unique id; crypto.randomUUID if available, else fallback.
   const rnd =
@@ -89,10 +102,11 @@ export function createTierId(): string {
 
 /** Build the starter board so the app never looks empty. */
 export function createDefaultBoard(): RankForgeBoard {
-  const tiers: Tier[] = ["S", "A", "B", "C", "D"].map((name) => ({
+  const tiers: Tier[] = ["S", "A", "B", "C", "D"].map((name, i) => ({
     id: createTierId(),
     name,
     color: DEFAULT_TIER_COLORS[name] ?? "#64748b",
+    points: DEFAULT_TIER_POINTS[name] ?? Math.max(0, 5 - i),
   }));
 
   const items: Record<string, TierItem> = {};
@@ -192,9 +206,14 @@ export function normalizeBoard(input: unknown): RankForgeBoard {
         : "#64748b";
     if (seenTierIds.has(id)) continue;
     seenTierIds.add(id);
-    tiers.push({ id, name, color });
+    const hasPoints = typeof t.points === "number" && isFinite(t.points);
+    tiers.push({ id, name, color, points: hasPoints ? (t.points as number) : -1 });
   }
   if (tiers.length === 0) throw new Error("Invalid file: no tiers found.");
+  // Assign position-based points (top = most) to any tier missing explicit points.
+  tiers.forEach((t, i) => {
+    if (t.points < 0) t.points = Math.max(0, tiers.length - i);
+  });
 
   const itemsSource = board.items as Record<string, unknown>;
   const items: Record<string, TierItem> = {};
@@ -206,7 +225,15 @@ export function normalizeBoard(input: unknown): RankForgeBoard {
     const label = typeof it.label === "string" ? it.label : "Untitled";
     const imageUrl =
       typeof it.imageUrl === "string" ? it.imageUrl : undefined;
-    items[id] = { id, type, label, ...(imageUrl ? { imageUrl } : {}) };
+    const assignedUserId =
+      typeof it.assignedUserId === "string" ? it.assignedUserId : undefined;
+    items[id] = {
+      id,
+      type,
+      label,
+      ...(imageUrl ? { imageUrl } : {}),
+      ...(assignedUserId ? { assignedUserId } : {}),
+    };
   }
 
   const tierItems: Record<string, string[]> = {};

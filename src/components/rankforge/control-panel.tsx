@@ -46,6 +46,7 @@ import { ColorPicker } from "./color-picker";
 import { MultiplayerPanel } from "./multiplayer-panel";
 import { VotingControls } from "./voting-controls";
 import { ActivityFeed } from "./activity-feed";
+import { Leaderboard } from "./leaderboard";
 import { downscaleImage, readFileAsDataURL, slugify } from "@/lib/image";
 import {
   Popover,
@@ -530,6 +531,7 @@ export function ControlPanelContent({
   return (
     <div className={cn("space-y-7", className)}>
       <MultiplayerPanel />
+      <Leaderboard />
       <VotingControls />
       <ActivityFeed />
       <AddItemSection />

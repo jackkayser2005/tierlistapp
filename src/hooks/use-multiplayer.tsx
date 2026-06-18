@@ -19,6 +19,15 @@ export interface FocusInfo {
   ts: number;
 }
 
+export interface CursorInfo {
+  userId: string;
+  userName: string;
+  userColor: string;
+  x: number; // 0-100 viewport %
+  y: number;
+  ts: number;
+}
+
 export interface MultiplayerState {
   status: ConnectionStatus;
   roomId: string | null;
@@ -28,6 +37,7 @@ export interface MultiplayerState {
   hostId: string | null;
   activity: ActivityEntry[];
   focuses: Record<string, FocusInfo>; // itemId -> FocusInfo
+  cursors: Record<string, CursorInfo>; // userId -> CursorInfo
 }
 
 interface ServerRoomState {
@@ -97,6 +107,7 @@ interface MultiplayerContextValue extends MultiplayerState {
   logActivity: (action: ActivityAction, detail: string) => void;
   setFocus: (itemId: string) => void;
   clearFocus: () => void;
+  moveCursor: (x: number, y: number) => void;
 }
 
 const MultiplayerContext = React.createContext<MultiplayerContextValue>({
@@ -118,6 +129,9 @@ const MultiplayerContext = React.createContext<MultiplayerContextValue>({
   shareUrl: null,
   setPresence: () => {},
   logActivity: () => {},
+  setFocus: () => {},
+  clearFocus: () => {},
+  moveCursor: () => {},
 });
 
 export function MultiplayerProvider({ children }: { children: React.ReactNode }) {
@@ -130,8 +144,10 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     hostId: null,
     activity: [],
     focuses: {},
+    cursors: {},
   });
   const focusTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const cursorTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const [user, setUser] = React.useState<LocalUser>({
     id: "",
@@ -363,6 +379,33 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
           return { ...s, focuses: next };
         });
       });
+      // Cursor relay — live mouse positions.
+      sock.off("cursor:move").on("cursor:move", (payload: CursorInfo) => {
+        if (!payload?.userId) return;
+        setState((s) => ({
+          ...s,
+          cursors: { ...s.cursors, [payload.userId]: payload },
+        }));
+        // Auto-expire after 5s of no movement.
+        const key = payload.userId;
+        if (cursorTimersRef.current[key]) clearTimeout(cursorTimersRef.current[key]);
+        cursorTimersRef.current[key] = setTimeout(() => {
+          setState((s) => {
+            const next = { ...s.cursors };
+            delete next[key];
+            return { ...s, cursors: next };
+          });
+          delete cursorTimersRef.current[key];
+        }, 5000);
+      });
+      sock.off("cursor:clear").on("cursor:clear", (payload: { userId: string }) => {
+        if (!payload?.userId) return;
+        setState((s) => {
+          const next = { ...s.cursors };
+          delete next[payload.userId];
+          return { ...s, cursors: next };
+        });
+      });
 
       const board = asHost ? snapshotBoard(useRankForge.getState()) : undefined;
       sock.emit("room:join", { roomId, board });
@@ -439,6 +482,25 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     if (sock && roomId) sock.emit("focus:clear", { roomId });
   }, []);
 
+  // ---- Cursor broadcast (rAF-throttled) ----
+  const cursorRafRef = React.useRef<number | null>(null);
+  const cursorPendingRef = React.useRef<{ x: number; y: number } | null>(null);
+  const sendCursor = React.useCallback(() => {
+    cursorRafRef.current = null;
+    const pending = cursorPendingRef.current;
+    if (!pending) return;
+    cursorPendingRef.current = null;
+    const sock = getSocket();
+    const roomId = getRoomFromUrl();
+    if (sock && roomId) sock.emit("cursor:move", { roomId, x: pending.x, y: pending.y });
+  }, []);
+  const moveCursor = React.useCallback((x: number, y: number) => {
+    cursorPendingRef.current = { x, y };
+    if (cursorRafRef.current === null) {
+      cursorRafRef.current = requestAnimationFrame(sendCursor);
+    }
+  }, [sendCursor]);
+
   // ---- Cleanup on unmount ----
   React.useEffect(() => {
     return () => {
@@ -492,8 +554,9 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       logActivity,
       setFocus,
       clearFocus,
+      moveCursor,
     }),
-    [state, hydrated, user, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity, setFocus, clearFocus]
+    [state, hydrated, user, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity, setFocus, clearFocus, moveCursor]
   );
 
   return (

@@ -20,6 +20,7 @@ interface RankForgeState extends RankForgeBoard {
   ) => void;
   deleteItem: (itemId: string) => void;
   updateItemLabel: (itemId: string, label: string) => void;
+  assignItem: (itemId: string, userId: string | undefined) => void;
   moveItem: (
     itemId: string,
     fromContainer: string,
@@ -30,7 +31,7 @@ interface RankForgeState extends RankForgeBoard {
 
   // ---- tier actions ----
   addTier: () => void;
-  updateTier: (tierId: string, patch: Partial<Pick<Tier, "name" | "color">>) => void;
+  updateTier: (tierId: string, patch: Partial<Pick<Tier, "name" | "color" | "points">>) => void;
   deleteTier: (tierId: string) => void;
   reorderTier: (tierId: string, direction: "up" | "down") => void;
 
@@ -102,6 +103,16 @@ export const useRankForge = create<RankForgeState>()(
           return {
             items: { ...state.items, [itemId]: { ...existing, label } },
           };
+        }),
+
+      assignItem: (itemId, userId) =>
+        set((state) => {
+          const existing = state.items[itemId];
+          if (!existing) return state;
+          const next = { ...existing };
+          if (userId) next.assignedUserId = userId;
+          else delete next.assignedUserId;
+          return { items: { ...state.items, [itemId]: next } };
         }),
 
       moveItem: (itemId, fromContainer, toContainer, toIndex) =>

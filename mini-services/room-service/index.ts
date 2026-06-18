@@ -658,6 +658,64 @@ io.on('connection', (socket: Socket) => {
     }
   })
 
+  // ----- cursor:move -----------------------------------------------------
+  // Live cursor sharing. PURE RELAY — we do NOT store any cursor state
+  // server-side (it's ephemeral; clients clear cursors on a timeout when
+  // updates stop arriving). Validates that roomId is a non-empty string and
+  // x / y are numbers in [0, 100] (percentage of viewport width/height), then
+  // looks up the room + the user (socket.id -> members; if not found, silent
+  // return), then relays to OTHER clients in the room so they can render that
+  // user's pointer.
+  //
+  // High-frequency event: NO log line per emit (would spam). Errors only.
+  // Clients are expected to throttle on their side (e.g. rAF / 30–60ms).
+  socket.on('cursor:move', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string; x?: number; y?: number }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      if (!roomId) return
+
+      // x / y must be finite numbers in [0, 100] (percentage of viewport).
+      const x = typeof data.x === 'number' && Number.isFinite(data.x) ? data.x : null
+      const y = typeof data.y === 'number' && Number.isFinite(data.y) ? data.y : null
+      if (x === null || y === null) return
+      if (x < 0 || x > 100 || y < 0 || y > 100) return
+
+      const room = rooms.get(roomId)
+      if (!room) return
+      const user = room.members.get(socket.id)
+      if (!user) return
+
+      socket.to(roomId).emit('cursor:move', {
+        userId: socket.id,
+        userName: user.name,
+        userColor: user.color,
+        x,
+        y,
+        ts: Date.now(),
+      })
+    } catch (err) {
+      console.error(`[cursor:move] error from ${socket.id}:`, err)
+    }
+  })
+
+  // ----- cursor:clear ----------------------------------------------------
+  // A user left the room or stopped moving their mouse. PURE RELAY — no
+  // server state to clean up. Validates roomId, then relays to OTHER clients
+  // in the room so they can drop that user's pointer. This is sent both by
+  // clients (on room leave / blur / idle) AND by the server on disconnect.
+  socket.on('cursor:clear', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      if (!roomId) return
+
+      socket.to(roomId).emit('cursor:clear', { userId: socket.id })
+    } catch (err) {
+      console.error(`[cursor:clear] error from ${socket.id}:`, err)
+    }
+  })
+
   // ----- heartbeat -------------------------------------------------------
   // Client emits this every ~20s (no payload). Server refreshes the user's
   // lastSeen across all rooms they're in. The server-side sweep uses
@@ -919,6 +977,15 @@ io.on('connection', (socket: Socket) => {
           // `leave()`'d yet), so we do this BEFORE forgetRoom/leave.
           try {
             socket.to(roomId).emit('focus:clear', { userId: socket.id })
+          } catch {
+            /* best-effort; never crash disconnect cleanup */
+          }
+
+          // Relay cursor:clear too, so peers remove the disconnecting user's
+          // live cursor immediately (instead of waiting for their client-side
+          // cursor timeout). Same try/catch mirror as focus:clear above.
+          try {
+            socket.to(roomId).emit('cursor:clear', { userId: socket.id })
           } catch {
             /* best-effort; never crash disconnect cleanup */
           }

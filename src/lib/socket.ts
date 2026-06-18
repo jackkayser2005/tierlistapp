@@ -16,9 +16,12 @@ let socket: Socket | null = null;
 export function ensureSocket(): Socket {
   if (socket) return socket;
   const url = process.env.NEXT_PUBLIC_ROOM_SERVICE_URL || null;
-  socket = io(url ?? "/?XTransformPort=3003", {
+  const target = url ?? "/?XTransformPort=3003";
+  socket = io(target, {
     path: "/",
-    transports: ["websocket", "polling"],
+    transports: ["polling", "websocket"],
+    upgrade: true,
+    rememberUpgrade: false,
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 800,

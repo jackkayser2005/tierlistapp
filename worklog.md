@@ -360,3 +360,73 @@ Stage Summary:
 - NEW: soft-delete to unranked with undo.
 - IMPROVED: longer tier names (28 chars, auto-scaling font).
 - REDESIGNED: "Slate" theme — sleek, production-ready, refined.
+
+---
+Task ID: 9
+Agent: full-stack-developer
+Task: Add a stateless live-cursor relay (`cursor:move` + `cursor:clear`) to the RankForge room-service so users can see each other's mouse pointers in real time. Pure relay — no server-side cursor state. Mirror the existing `focus:set` / `focus:clear` pattern.
+
+Work Log:
+- Read Task 0–8 worklog and the full `mini-services/room-service/index.ts` (994 lines) to understand the existing relay conventions (focus:set/focus:clear, the disconnect cleanup order, the try/catch-each-handler discipline, the high-frequency "no per-emit log" rule).
+- Added `cursor:move` handler immediately after `focus:clear` (before `heartbeat`):
+  - Payload `{ roomId?: string; x?: number; y?: number }`.
+  - Validates `roomId` is a non-empty string (trimmed); `x` and `y` are finite numbers in `[0, 100]` (viewport percentages). Invalid → silent return.
+  - Looks up `rooms.get(roomId)` + `room.members.get(socket.id)`; missing → silent return (pure relay, no `room:error`).
+  - Relays to OTHER clients only: `socket.to(roomId).emit('cursor:move', { userId: socket.id, userName: user.name, userColor: user.color, x, y, ts: Date.now() })`.
+  - No per-emit log (high frequency — would spam). Only `console.error` on caught errors. Wrapped in try/catch.
+- Added `cursor:clear` handler right after `cursor:move`:
+  - Payload `{ roomId?: string }`. Validates `roomId` (non-empty, trimmed).
+  - Relays `socket.to(roomId).emit('cursor:clear', { userId: socket.id })` to OTHER clients.
+  - Same try/catch + errors-only logging discipline. Sent by clients on leave/blur/idle AND by the server on disconnect.
+- Added a `cursor:clear` relay in the existing `disconnect` handler, right next to the existing `focus:clear` relay and BEFORE `forgetRoom` / `socket.leave` (so the socket is still valid for one last `to()` emit). Wrapped in its own try/catch so it can never crash disconnect cleanup. Iterates each room the socket was in (same `joined` set already used by the existing logic).
+- Did NOT touch any existing event handlers, the heartbeat sweep, the room helpers, or the boot/shutdown code. Port 3003, path `/`, CORS `*` unchanged.
+- Restart: `pkill -f "bun --hot index.ts"; pkill -f "bun run dev"; sleep 2; cd mini-services/room-service && setsid bun run dev > service.log 2>&1 < /dev/null & sleep 3; lsof -i:3003 | grep LISTEN` → `bun  20437  z  71u  IPv6 135933  0t0  TCP *:3003 (LISTEN)`.
+- `service.log` shows `$ bun --hot index.ts` + `room-service on :3003`, no errors.
+- Sanity build: `bun build index.ts --target=bun --outfile=/tmp/rs-check.js` → `rs-check.js  0.47 MB  (entry point)`, no TS errors.
+- Wrote per-agent work record at `/agent-ctx/9-full-stack-developer.md` (includes the exact wire payload shapes and frontend integration notes for the next agent).
+
+Stage Summary:
+- NEW server events: `cursor:move` (relay) and `cursor:clear` (relay + disconnect-driven).
+- Wire contract:
+  - Client → Server `cursor:move`: `{ roomId: string; x: number; y: number }` (x/y are viewport %, 0–100).
+  - Client → Server `cursor:clear`: `{ roomId: string }`.
+  - Server → Client `cursor:move`: `{ userId, userName, userColor, x, y, ts }` (to OTHERS, never sender).
+  - Server → Client `cursor:clear`: `{ userId }` (to OTHERS; also emitted by server on disconnect for each room the socket was in).
+- Stateless: no cursor state stored server-side. Clients clear cursors on a timeout; the server also proactively relays `cursor:clear` on disconnect so peers remove the pointer immediately.
+- Service restarted cleanly on :3003; build clean; no per-emit log spam; all existing behavior (room:join, board:update, activity:log, presence:set, heartbeat, voting, focus:set/clear) untouched.
+- Next: frontend agent can wire `mousemove` (throttled) → `cursor:move`, listen for `cursor:move`/`cursor:clear` to render peer pointers, and use a client-side timeout (3–5s) to drop stale cursors.
+
+---
+Task ID: 10
+Agent: orchestrator (main)
+Task: Scoring system, leaderboard, live cursors, item assignment, layout cleanup, speed improvements.
+
+Work Log:
+- **Data model**: Added `points: number` to Tier (default S=5, A=4, B=3, C=2, D=1; position-based for custom tiers). Added `assignedUserId?: string` to TierItem. Updated createDefaultBoard + normalizeBoard with backwards-compatible migration (missing points → position-based defaults).
+- **Store actions**: Added `assignItem(itemId, userId)` to set/clear item ownership. Updated `updateTier` to accept `points` in patch.
+- **Scoring engine** (src/lib/scoring.ts): `computeLeaderboard()` — for each user with assigned items, sums tier points. Items in unranked = 0 pts. Picks the highest-point image item as the user's avatar. Returns sorted by score desc.
+- **Leaderboard component**: Shows users ranked by score with colored score bars, crown for leader, item counts, and photo avatars (from assigned image items). Only shows when connected + items assigned.
+- **Item assignment UI**: Added UserPlus button on each card (hover). Popover lists room members with colored avatars. Assigned items show a colored avatar badge (bottom-left corner of card). Unassign option in popover.
+- **Tier points display**: Each tier row now shows a "5pt" badge below the tier name.
+- **Live cursors** (Task 9 subagent + frontend): Added cursor:move/cursor:clear relay to room service. Frontend broadcasts mouse position via rAF-throttled mousemove listener (viewport %). Renders colored SVG cursors with name labels for other users. Auto-expires after 5s. Hidden in PNG export.
+- **Room persistence**: Verified auto-rejoin from URL `?room=CODE` works on reload. Server sends current board + vote state + activity log on rejoin. Reconnect handler re-emits identity + room:join + vote:sync-request.
+- **Connection stability fix**: Changed socket transports from ["websocket","polling"] to ["polling","websocket"] — the Caddy gateway doesn't forward WebSocket upgrades correctly, so polling-first ensures reliable connections through the proxy. WebSocket upgrade is still attempted after polling connects.
+- **Speed**: rAF-throttled cursor broadcast (max 1 emit per frame). 250ms focus throttle. 400ms presence throttle. 120ms board debounce. Voting hook uses refs (binds only to [status, roomId]). Leaderboard uses useMemo with individual store selectors (no object-creation per render).
+- Fixed infinite loop bug in Leaderboard (was creating new object in selector → getSnapshot caching violation).
+
+Verification (agent-browser 2-client via Caddy :81):
+- Room created (XJZD5), both clients "2 ONLINE", vote overlay on both.
+- Multi-round voting: vote #1 (P1:S, P2:A, ended, both closed) → vote #2 (started, both saw overlay, cancelled). Works flawlessly.
+- Item assignment: assigned Pepperoni Pizza to "Wisp 80" → leaderboard appeared showing "Wisp 80, 1 item, 5 points" (S tier = 5 pts). Assigned badge appeared on card.
+- Tier points visible ("5pt" badges on tier rows).
+- Lint clean. Both services running.
+- VLM: 8/10 (sleek, production-ready, minor mobile spacing tweaks).
+
+Stage Summary:
+- NEW: Scoring system — each tier has editable points (S=5, A=4, etc.), shown as badges on tier rows.
+- NEW: Leaderboard — users ranked by total score, with photo avatars from their highest-ranked image item, colored score bars, crown for leader.
+- NEW: Item assignment — connect any item to a room user via UserPlus button; shows colored avatar badge on card.
+- NEW: Live cursors — see other users' mouse pointers moving in real time with colored SVG cursors + name labels.
+- FIXED: Connection stability — polling-first transport works reliably through Caddy gateway.
+- FIXED: Room persistence — auto-rejoin on reload with full state hydration.
+- IMPROVED: Speed — rAF cursor throttle, refs in voting hook, memoized leaderboard.
