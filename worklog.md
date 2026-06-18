@@ -430,3 +430,26 @@ Stage Summary:
 - FIXED: Connection stability — polling-first transport works reliably through Caddy gateway.
 - FIXED: Room persistence — auto-rejoin on reload with full state hydration.
 - IMPROVED: Speed — rAF cursor throttle, refs in voting hook, memoized leaderboard.
+
+---
+Task ID: 11
+Agent: orchestrator (main)
+Task: Fix delete/undo from unranked — restore full item data on undo.
+
+Work Log:
+- **Root cause**: The old undo for unranked deletes used `addItem()` which creates a NEW item with a new ID — losing `assignedUserId`, `imageUrl`, and the original position. So "Undo" didn't properly restore the item.
+- **Fix**: Added `restoreItem(item, container, index)` store action that re-inserts the exact item (same ID, full data including assignedUserId) at its original position.
+- **Updated handleRemove** in item-card.tsx:
+  - Items in tiers → moves to Unranked with Undo (restores to original tier + position via `moveItem`)
+  - Items in Unranked → permanent `deleteItem` with Undo (restores full item via `restoreItem` at original index)
+  - Both toasts now say "Deleted" or "Moved" clearly with an Undo button.
+
+Verification (agent-browser):
+- Unranked delete: count 6 → 5 (deleted "Karaoke") → Undo → count 6 (restored). ✓
+- Tier delete: S tier had 3 items → deleted "Pepperoni Pizza" → moved to Unranked (count 6→7) with Undo. ✓
+- No console errors. Lint clean. Both services running.
+
+Stage Summary:
+- FIXED: Undo from unranked now properly restores the exact item (same ID, assignedUserId, imageUrl, position).
+- FIXED: Items can be permanently deleted from Unranked (not just soft-deleted).
+- Design unchanged (user confirmed they like it).

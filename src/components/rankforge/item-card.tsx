@@ -157,8 +157,10 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
   } = useSortable({ id: item.id, data: { containerId, type: "item" } });
 
   const deleteItem = useRankForge((s) => s.deleteItem);
+  const restoreItem = useRankForge((s) => s.restoreItem);
   const moveItem = useRankForge((s) => s.moveItem);
   const findContainerOf = useRankForge((s) => s.findContainerOf);
+  const indexOfItem = useRankForge((s) => s.indexOfItem);
   const updateItemLabel = useRankForge((s) => s.updateItemLabel);
   const assignItem = useRankForge((s) => s.assignItem);
   const { votingMode } = useVotingMode();
@@ -185,32 +187,32 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
   const focusColor = focus?.userColor;
   const focusName = focus?.userName;
 
-  // Soft-delete: move to unranked with undo toast. If already unranked, hard delete with confirm.
+  // Delete logic: items in tiers → move to Unranked (soft). Items in Unranked → permanent delete. Both with Undo.
   const handleRemove = () => {
     const currentContainer = findContainerOf(item.id);
     if (currentContainer && currentContainer !== UNRANKED_ID) {
+      // Item is in a tier → move to Unranked with undo.
+      const oldIndex = indexOfItem(currentContainer, item.id);
       moveItem(item.id, currentContainer, UNRANKED_ID, -1);
-      toast(`Moved “${item.label}” to Unranked`, {
-        description: "Undo to remove it permanently.",
+      toast(`Moved "${item.label}" to Unranked`, {
         action: {
           label: "Undo",
           onClick: () => {
-            if (currentContainer) moveItem(item.id, UNRANKED_ID, currentContainer, -1);
+            moveItem(item.id, UNRANKED_ID, currentContainer, oldIndex);
           },
         },
         duration: 5000,
       });
     } else {
+      // Item is in Unranked → permanent delete with undo that restores full data.
+      const oldIndex = indexOfItem(UNRANKED_ID, item.id);
+      const snapshot = { ...item };
       deleteItem(item.id);
-      toast(`Removed “${item.label}”`, {
+      toast(`Deleted "${item.label}"`, {
         action: {
           label: "Undo",
           onClick: () => {
-            // Best-effort restore — re-add with same data.
-            useRankForge.getState().addItem(
-              { type: item.type, label: item.label, ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}) },
-              UNRANKED_ID
-            );
+            restoreItem(snapshot, UNRANKED_ID, oldIndex);
           },
         },
         duration: 5000,

@@ -19,6 +19,7 @@ interface RankForgeState extends RankForgeBoard {
     container?: string | null
   ) => void;
   deleteItem: (itemId: string) => void;
+  restoreItem: (item: TierItem, container: string, index: number) => void;
   updateItemLabel: (itemId: string, label: string) => void;
   assignItem: (itemId: string, userId: string | undefined) => void;
   moveItem: (
@@ -93,6 +94,25 @@ export const useRankForge = create<RankForgeState>()(
             items,
             tierItems,
             unranked: arrayWithout(state.unranked, itemId),
+          };
+        }),
+
+      restoreItem: (item, container, index) =>
+        set((state) => {
+          // Re-insert the item with its original id + full data.
+          const items = { ...state.items, [item.id]: item };
+          if (container === UNRANKED_ID) {
+            const unranked = state.unranked.slice();
+            const insertAt = Math.max(0, Math.min(index, unranked.length));
+            unranked.splice(insertAt, 0, item.id);
+            return { items, unranked };
+          }
+          const arr = (state.tierItems[container] ?? []).slice();
+          const insertAt = Math.max(0, Math.min(index, arr.length));
+          arr.splice(insertAt, 0, item.id);
+          return {
+            items,
+            tierItems: { ...state.tierItems, [container]: arr },
           };
         }),
 
