@@ -301,7 +301,7 @@ export function VoteButton({
     <Button
       size="sm"
       variant="secondary"
-      className="rf-no-export absolute inset-x-1.5 bottom-1.5 h-6 gap-1 rounded-md border border-white/10 bg-background/90 text-[10px] font-semibold opacity-0 backdrop-blur transition-opacity group-hover:opacity-100"
+      className="rf-no-export absolute inset-x-1.5 bottom-1.5 h-6 gap-1 rounded-md border border-white/10 bg-background/90 text-[10px] font-semibold opacity-60 backdrop-blur transition-opacity group-hover:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={() => {
         startVote(item);

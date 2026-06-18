@@ -246,11 +246,11 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
         />
       </div>
 
-      {/* Hover actions — hidden in PNG export via rf-no-export */}
+      {/* Card actions — visible on hover (desktop) and always on touch devices */}
       <div
         onPointerDown={stop}
         data-rf-skip="true"
-        className="rf-no-export absolute -right-1.5 -top-1.5 flex gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
+        className="rf-no-export absolute -right-1.5 -top-1.5 flex gap-1 opacity-60 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
       >
         <Popover open={editOpen} onOpenChange={setEditOpen}>
           <PopoverTrigger asChild>
