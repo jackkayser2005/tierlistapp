@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/sheet";
 import { useRankForge } from "@/lib/store";
 import type { RankForgeBoard } from "@/lib/tierlist";
+import { useMultiplayer } from "@/hooks/use-multiplayer";
 import { ThemeToggle } from "./theme-toggle";
 import { PresenceChip } from "./multiplayer-panel";
 import { ControlPanelContent } from "./control-panel";
@@ -26,6 +27,7 @@ export function Header({ onExportPng, exporting }: HeaderProps) {
   const [panelOpen, setPanelOpen] = React.useState(false);
   const newBoard = useRankForge((s) => s.newBoard);
   const loadBoard = useRankForge((s) => s.loadBoard);
+  const { canEdit } = useMultiplayer();
 
   const handleNewBoard = () => {
     const s = useRankForge.getState();
@@ -67,16 +69,18 @@ export function Header({ onExportPng, exporting }: HeaderProps) {
         {/* Right actions */}
         <div className="flex items-center gap-2">
           <PresenceChip />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleNewBoard}
-            className="hidden gap-1.5 text-muted-foreground hover:text-foreground sm:inline-flex"
-            title="Start a fresh, empty board"
-          >
-            <FilePlus className="size-4" />
-            New
-          </Button>
+          {canEdit ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleNewBoard}
+              className="hidden gap-1.5 text-muted-foreground hover:text-foreground sm:inline-flex"
+              title="Start a fresh, empty board"
+            >
+              <FilePlus className="size-4" />
+              New
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"

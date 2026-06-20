@@ -68,6 +68,7 @@ function BoardHeader() {
   const description = useRankForge((s) => s.description);
   const setMeta = useRankForge((s) => s.setMeta);
   const itemCount = useRankForge((s) => Object.keys(s.items).length);
+  const { canEdit } = useMultiplayer();
 
   return (
     <div className="rf-no-export mb-5 space-y-1.5">
@@ -76,6 +77,7 @@ function BoardHeader() {
           value={title}
           maxLength={60}
           placeholder="Untitled tier list"
+          readOnly={!canEdit}
           onChange={(e) => setMeta({ title: e.target.value })}
           className="border-0 bg-transparent px-0 text-xl font-bold tracking-tight shadow-none focus-visible:ring-0 sm:text-2xl"
         />
@@ -86,7 +88,8 @@ function BoardHeader() {
       <Input
         value={description}
         maxLength={140}
-        placeholder="Add a short description…"
+        placeholder={canEdit ? "Add a short description…" : ""}
+        readOnly={!canEdit}
         onChange={(e) => setMeta({ description: e.target.value })}
         className="border-0 bg-transparent px-0 text-sm text-muted-foreground shadow-none focus-visible:ring-0"
       />

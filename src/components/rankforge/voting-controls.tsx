@@ -39,20 +39,22 @@ export function VotingControls() {
         ) : null}
       </div>
 
-      {/* Voting mode toggle */}
-      <div className="rf-inset flex items-center justify-between gap-3 rounded-xl p-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium leading-tight">Voting mode</p>
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            Show a Vote button on every card.
-          </p>
+      {/* Voting mode toggle — host only */}
+      {isHost ? (
+        <div className="rf-inset flex items-center justify-between gap-3 rounded-xl p-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium leading-tight">Voting mode</p>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Show a Vote button on every card.
+            </p>
+          </div>
+          <Switch
+            checked={votingMode}
+            onCheckedChange={setVotingMode}
+            aria-label="Toggle voting mode"
+          />
         </div>
-        <Switch
-          checked={votingMode}
-          onCheckedChange={setVotingMode}
-          aria-label="Toggle voting mode"
-        />
-      </div>
+      ) : null}
 
       {/* Host controls */}
       {isHost ? (

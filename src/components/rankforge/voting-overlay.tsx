@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import {
   Check,
   X,
@@ -24,6 +25,63 @@ function nameInitials(name: string): string {
   if (parts.length === 0) return "?";
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+/**
+ * A real modal layer: portaled to <body> so no transformed/blurred ancestor can
+ * trap it in document flow (which made the vote panel render at the page bottom).
+ * Locks body scroll while open and supports Escape + backdrop dismissal.
+ */
+function ModalLayer({
+  children,
+  z = "z-50",
+  onClose,
+  closeOnBackdrop = false,
+}: {
+  children: React.ReactNode;
+  z?: string;
+  onClose?: () => void;
+  closeOnBackdrop?: boolean;
+}) {
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+
+  React.useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!onClose) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div
+      className={cn(
+        "fixed inset-0 flex items-center justify-center p-4 sm:p-6",
+        z
+      )}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="absolute inset-0 bg-black/75 backdrop-blur-md"
+        onClick={closeOnBackdrop ? onClose : undefined}
+      />
+      {children}
+    </div>,
+    document.body
+  );
 }
 
 function VoteCard({ item }: { item: TierItem }) {
@@ -110,13 +168,9 @@ function CelebrationOverlay() {
   const totalVotes = Object.values(celebration.tally).reduce((a, b) => a + b, 0);
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-      onClick={dismissCelebration}
-    >
-      <div className="absolute inset-0 bg-black/80 backdrop-blur-lg" />
+    <ModalLayer z="z-[60]" onClose={dismissCelebration} closeOnBackdrop>
       <div
-        className="rf-pop-in relative w-full max-w-md overflow-hidden rounded-3xl p-8 text-center shadow-2xl"
+        className="rf-pop-in relative max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-3xl p-8 text-center shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         style={{
           background: `linear-gradient(160deg, ${winnerColor}, color-mix(in srgb, ${winnerColor} 50%, #000))`,
@@ -208,7 +262,7 @@ function CelebrationOverlay() {
           )}
         </div>
       </div>
-    </div>
+    </ModalLayer>
   );
 }
 
@@ -229,10 +283,8 @@ export function VotingOverlay() {
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="absolute inset-0 bg-black/70 backdrop-blur-md" />
-
-        <div className="rf-pop-in rf-panel relative w-full max-w-lg overflow-hidden rounded-3xl p-6 sm:p-7">
+      <ModalLayer z="z-50" onClose={canControl ? cancelVote : undefined}>
+        <div className="rf-pop-in rf-panel relative max-h-[90dvh] w-full max-w-lg overflow-y-auto rf-scroll rounded-3xl p-6 sm:p-7">
           {/* header */}
           <div className="mb-5 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
@@ -371,7 +423,7 @@ export function VotingOverlay() {
             </p>
           </div>
         </div>
-      </div>
+      </ModalLayer>
       <CelebrationOverlay />
     </>
   );

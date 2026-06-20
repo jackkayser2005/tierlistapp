@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useRankForge } from "@/lib/store";
 import { readableTextOn, type Tier } from "@/lib/tierlist";
+import { useMultiplayer } from "@/hooks/use-multiplayer";
 import { ColorPicker } from "./color-picker";
 import { DroppableContainer } from "./droppable-container";
 import { toast } from "sonner";
@@ -33,6 +34,7 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
   const updateTier = useRankForge((s) => s.updateTier);
   const reorderTier = useRankForge((s) => s.reorderTier);
   const deleteTier = useRankForge((s) => s.deleteTier);
+  const { canEdit } = useMultiplayer();
 
   const textColor = readableTextOn(tier.color);
   const [colorOpen, setColorOpen] = React.useState(false);
@@ -80,8 +82,12 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
                 (e.target as HTMLInputElement).blur();
               }
             }}
+            readOnly={!canEdit}
             aria-label="Tier name"
-            className="w-full bg-transparent text-center font-black uppercase leading-tight outline-none transition focus:rounded-md focus:bg-black/15"
+            className={cn(
+              "w-full bg-transparent text-center font-black uppercase leading-tight outline-none transition focus:rounded-md focus:bg-black/15",
+              !canEdit && "pointer-events-none"
+            )}
             style={{ color: textColor, fontSize: tier.name.length > 6 ? "1rem" : tier.name.length > 3 ? "1.5rem" : "1.75rem" }}
             maxLength={28}
             size={1}
@@ -99,7 +105,8 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
           </span>
         </div>
 
-        {/* subtle controls — appear on hover, secondary */}
+        {/* subtle controls — appear on hover, secondary; host/solo only */}
+        {canEdit ? (
         <div
           className="rf-no-export relative flex items-center gap-0.5 rounded-full bg-black/15 px-1 py-0.5 opacity-0 backdrop-blur-sm transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
           onPointerDown={(e) => e.stopPropagation()}
@@ -180,6 +187,7 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
             <TooltipContent>Delete tier</TooltipContent>
           </Tooltip>
         </div>
+        ) : null}
       </div>
 
       {/* Dropzone */}

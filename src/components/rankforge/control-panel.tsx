@@ -15,6 +15,7 @@ import {
   RotateCcw,
   FilePlus,
   Image as ImageIcon,
+  Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -416,7 +417,9 @@ function ShareSection({ onExportPng, exporting }: { onExportPng: () => void; exp
   const items = useRankForge((s) => s.items);
   const tierItems = useRankForge((s) => s.tierItems);
   const unranked = useRankForge((s) => s.unranked);
+  const bankedScores = useRankForge((s) => s.bankedScores);
   const loadBoard = useRankForge((s) => s.loadBoard);
+  const { canEdit } = useMultiplayer();
   const importRef = React.useRef<HTMLInputElement>(null);
 
   const getBoard = React.useCallback<() => RankForgeBoard>(
@@ -427,8 +430,9 @@ function ShareSection({ onExportPng, exporting }: { onExportPng: () => void; exp
       items,
       tierItems,
       unranked,
+      bankedScores,
     }),
-    [title, description, tiers, items, tierItems, unranked]
+    [title, description, tiers, items, tierItems, unranked, bankedScores]
   );
 
   const handleExport = () => {
@@ -498,20 +502,24 @@ function ShareSection({ onExportPng, exporting }: { onExportPng: () => void; exp
         </Button>
       </div>
 
-      <Button
-        variant="ghost"
-        className="w-full text-muted-foreground"
-        onClick={() => importRef.current?.click()}
-      >
-        <FolderOpen className="size-4" /> Import JSON
-      </Button>
-      <input
-        ref={importRef}
-        type="file"
-        accept="application/json,.json"
-        className="hidden"
-        onChange={(e) => handleImportFile(e.target.files)}
-      />
+      {canEdit ? (
+        <>
+          <Button
+            variant="ghost"
+            className="w-full text-muted-foreground"
+            onClick={() => importRef.current?.click()}
+          >
+            <FolderOpen className="size-4" /> Import JSON
+          </Button>
+          <input
+            ref={importRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => handleImportFile(e.target.files)}
+          />
+        </>
+      ) : null}
       <p className="text-[11px] leading-relaxed text-muted-foreground/70">
         Everything also auto-saves to this browser.
       </p>
@@ -530,15 +538,29 @@ export function ControlPanelContent({
   exporting,
   className,
 }: ControlPanelContentProps) {
+  const { canEdit } = useMultiplayer();
   return (
     <div className={cn("space-y-7", className)}>
       <MultiplayerPanel />
       <Leaderboard />
       <VotingControls />
       <ActivityFeed />
-      <AddItemSection />
-      <TiersSection />
-      <BoardSection />
+      {canEdit ? (
+        <>
+          <AddItemSection />
+          <TiersSection />
+          <BoardSection />
+        </>
+      ) : (
+        <div className="rf-inset flex items-start gap-2.5 rounded-xl p-3 text-xs leading-relaxed text-muted-foreground">
+          <Eye className="mt-0.5 size-3.5 shrink-0 text-violet-300" />
+          <span>
+            <span className="font-medium text-foreground/80">View-only.</span>{" "}
+            The host controls the board — you can still vote and watch the
+            leaderboard update live.
+          </span>
+        </div>
+      )}
       <ShareSection onExportPng={onExportPng} exporting={exporting} />
     </div>
   );

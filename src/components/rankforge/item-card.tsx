@@ -150,6 +150,8 @@ interface SortableItemCardProps {
 }
 
 export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
+  const { setFocus, clearFocus, status, assignableMembers, canEdit, logActivity } =
+    useMultiplayer();
   const {
     attributes,
     listeners,
@@ -157,7 +159,11 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: item.id, data: { containerId, type: "item" } });
+  } = useSortable({
+    id: item.id,
+    data: { containerId, type: "item" },
+    disabled: !canEdit,
+  });
 
   const deleteItem = useRankForge((s) => s.deleteItem);
   const restoreItem = useRankForge((s) => s.restoreItem);
@@ -166,8 +172,6 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
   const updateItemLabel = useRankForge((s) => s.updateItemLabel);
   const assignItem = useRankForge((s) => s.assignItem);
   const { votingMode } = useVotingMode();
-  const { setFocus, clearFocus, status, assignableMembers, logActivity } =
-    useMultiplayer();
   const focus = useItemFocus(item.id);
   const assignedMember = item.assignedUserId
     ? assignableMembers.find(
@@ -227,7 +231,10 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
       <div
         {...attributes}
         {...listeners}
-        className="cursor-grab touch-none active:cursor-grabbing"
+        className={cn(
+          "touch-none",
+          canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-default"
+        )}
       >
         <ItemCardView
           item={item}
@@ -241,7 +248,8 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
         />
       </div>
 
-      {/* Card actions — visible on hover (desktop) and always on touch devices */}
+      {/* Card actions — host/solo only; visible on hover (desktop) and always on touch */}
+      {canEdit ? (
       <div
         onPointerDown={stop}
         data-rf-skip="true"
@@ -373,8 +381,9 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
           <Trash2 className="size-3" />
         </Button>
       </div>
+      ) : null}
 
-      <VoteButton item={item} votingMode={votingMode} />
+      {canEdit ? <VoteButton item={item} votingMode={votingMode} /> : null}
     </div>
   );
 }

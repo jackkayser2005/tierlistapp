@@ -166,6 +166,9 @@ interface MultiplayerContextValue extends MultiplayerState {
   /** Everyone an item can be assigned to. Always includes the local user, even
    * offline, so the points/leaderboard feature works in solo mode too. */
   assignableMembers: RoomUser[];
+  /** Whether this client may edit the board. True when solo (not in a room) or
+   * when host. Guests in a room can watch & vote but not edit. */
+  canEdit: boolean;
   updateUser: (patch: Partial<LocalUser>) => void;
   createRoom: () => void;
   joinRoom: (roomId: string, asHost: boolean) => void;
@@ -190,6 +193,7 @@ const MultiplayerContext = React.createContext<MultiplayerContextValue>({
   hydrated: false,
   user: { id: "", name: "Guest", color: "#64748b" },
   assignableMembers: [],
+  canEdit: true,
   updateUser: () => {},
   createRoom: () => {},
   joinRoom: () => {},
@@ -593,12 +597,16 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     return hasSelf ? state.members : [...state.members, selfAsMember];
   }, [state.members, user.id, user.name, user.color]);
 
+  // Guests in a room can watch & vote, but only the host (or a solo user) edits.
+  const canEdit = state.status !== "connected" || state.isHost;
+
   const value = React.useMemo<MultiplayerContextValue>(
     () => ({
       ...state,
       hydrated,
       user,
       assignableMembers,
+      canEdit,
       updateUser,
       createRoom,
       joinRoom,
@@ -611,7 +619,7 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       clearFocus,
       applySilentUpdate,
     }),
-    [state, hydrated, user, assignableMembers, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity, setFocus, clearFocus, applySilentUpdate]
+    [state, hydrated, user, assignableMembers, canEdit, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity, setFocus, clearFocus, applySilentUpdate]
   );
 
   return (
