@@ -179,16 +179,31 @@
   z-index: 1;
 }
 
-/* Panels — clean, solid, subtle border with depth. */
+/* Panels — clean, solid, subtle border with real depth. */
 .rf-panel {
-  background: color-mix(in oklch, var(--card) 92%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in oklch, white 4%, transparent), transparent 42%),
+    color-mix(in oklch, var(--card) 94%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid color-mix(in oklch, white 7%, transparent);
+  border: 1px solid color-mix(in oklch, white 9%, transparent);
   box-shadow:
-    0 1px 0 0 color-mix(in oklch, white 5%, transparent) inset,
-    0 1px 3px 0 rgb(0 0 0 / 0.4),
-    0 12px 32px -16px rgb(0 0 0 / 0.7);
+    0 1px 0 0 color-mix(in oklch, white 8%, transparent) inset,
+    0 2px 5px 0 rgb(0 0 0 / 0.35),
+    0 18px 44px -22px rgb(0 0 0 / 0.85);
+}
+
+/* The board's main surface — gives the ranked area a raised, distinct feel so
+   the page no longer "lays flat". */
+.rf-board-surface {
+  background:
+    radial-gradient(120% 80% at 50% -10%, color-mix(in oklch, oklch(0.6 0.16 285) 10%, transparent), transparent 60%),
+    linear-gradient(180deg, color-mix(in oklch, white 5%, transparent), transparent 30%),
+    color-mix(in oklch, var(--card) 60%, transparent);
+  border: 1px solid color-mix(in oklch, white 8%, transparent);
+  box-shadow:
+    0 1px 0 0 color-mix(in oklch, white 7%, transparent) inset,
+    0 24px 60px -30px rgb(0 0 0 / 0.9);
 }
 .rf-panel-soft {
   background: color-mix(in oklch, var(--card) 70%, transparent);

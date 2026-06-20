@@ -150,6 +150,7 @@ function snapshotBoard(state: ReturnType<typeof useRankForge.getState>): RankFor
     items: state.items,
     tierItems: state.tierItems,
     unranked: state.unranked,
+    bankedScores: state.bankedScores,
   };
 }
 
@@ -162,6 +163,9 @@ function nextEventId(): string {
 interface MultiplayerContextValue extends MultiplayerState {
   hydrated: boolean;
   user: LocalUser;
+  /** Everyone an item can be assigned to. Always includes the local user, even
+   * offline, so the points/leaderboard feature works in solo mode too. */
+  assignableMembers: RoomUser[];
   updateUser: (patch: Partial<LocalUser>) => void;
   createRoom: () => void;
   joinRoom: (roomId: string, asHost: boolean) => void;
@@ -185,6 +189,7 @@ const MultiplayerContext = React.createContext<MultiplayerContextValue>({
   hostId: null,
   hydrated: false,
   user: { id: "", name: "Guest", color: "#64748b" },
+  assignableMembers: [],
   updateUser: () => {},
   createRoom: () => {},
   joinRoom: () => {},
@@ -570,11 +575,30 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     }
   }, [shareUrl]);
 
+  // Everyone assignable: room members when connected, otherwise just the local
+  // user so the points feature still works solo.
+  const assignableMembers = React.useMemo<RoomUser[]>(() => {
+    const selfAsMember: RoomUser = {
+      id: user.id,
+      identityId: user.id,
+      name: user.name,
+      color: user.color,
+      presence: "online",
+      lastSeen: Date.now(),
+    };
+    if (state.members.length === 0) return user.id ? [selfAsMember] : [];
+    const hasSelf = state.members.some(
+      (m) => m.identityId === user.id || m.id === user.id
+    );
+    return hasSelf ? state.members : [...state.members, selfAsMember];
+  }, [state.members, user.id, user.name, user.color]);
+
   const value = React.useMemo<MultiplayerContextValue>(
     () => ({
       ...state,
       hydrated,
       user,
+      assignableMembers,
       updateUser,
       createRoom,
       joinRoom,
@@ -587,7 +611,7 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       clearFocus,
       applySilentUpdate,
     }),
-    [state, hydrated, user, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity, setFocus, clearFocus, applySilentUpdate]
+    [state, hydrated, user, assignableMembers, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity, setFocus, clearFocus, applySilentUpdate]
   );
 
   return (

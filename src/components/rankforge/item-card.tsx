@@ -166,10 +166,11 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
   const updateItemLabel = useRankForge((s) => s.updateItemLabel);
   const assignItem = useRankForge((s) => s.assignItem);
   const { votingMode } = useVotingMode();
-  const { setFocus, clearFocus, status, members, logActivity } = useMultiplayer();
+  const { setFocus, clearFocus, status, assignableMembers, logActivity } =
+    useMultiplayer();
   const focus = useItemFocus(item.id);
   const assignedMember = item.assignedUserId
-    ? members.find(
+    ? assignableMembers.find(
         (m) => memberKey(m) === item.assignedUserId || m.id === item.assignedUserId
       )
     : undefined;
@@ -302,7 +303,7 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
           </PopoverContent>
         </Popover>
 
-        {status === "connected" && members.length > 0 ? (
+        {assignableMembers.length > 0 ? (
           <Popover open={assignOpen} onOpenChange={setAssignOpen}>
             <PopoverTrigger asChild>
               <Button
@@ -335,7 +336,7 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
                     <X className="size-3.5" /> Unassign
                   </Button>
                 ) : null}
-                {members.map((m) => (
+                {assignableMembers.map((m) => (
                   <button
                     key={m.id}
                     onClick={() => {

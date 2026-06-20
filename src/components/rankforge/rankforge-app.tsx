@@ -262,7 +262,7 @@ function RankForgeInner() {
                 <div ref={exportRef} className="rf-export-shell rounded-2xl">
                   <ExportHeader />
                   <BoardHeader />
-                  <div className="flex flex-col gap-4">
+                  <div className="rf-board-surface flex flex-col gap-4 rounded-2xl p-3 sm:p-4">
                     <TierBoard dragOverContainer={dragOverContainer} />
                     <UnrankedPool dragOverContainer={dragOverContainer} />
                   </div>

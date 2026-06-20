@@ -24,6 +24,15 @@ export interface Tier {
 /** Special container id used for the unranked pool. */
 export const UNRANKED_ID = "__unranked__";
 
+/** Cumulative score banked for a player across finished rounds. Stores name +
+ * color so banked players still render even after they disconnect. */
+export interface BankedScore {
+  score: number;
+  itemCount: number;
+  name: string;
+  color: string;
+}
+
 export interface RankForgeBoard {
   title: string;
   description: string;
@@ -33,6 +42,8 @@ export interface RankForgeBoard {
   tierItems: Record<string, string[]>;
   /** ordered item ids in the unranked pool. */
   unranked: string[];
+  /** identityId -> cumulative banked score across finished rounds. */
+  bankedScores: Record<string, BankedScore>;
 }
 
 export const RANKFORGE_VERSION = 1;
@@ -165,6 +176,7 @@ export function createDefaultBoard(): RankForgeBoard {
     items,
     tierItems,
     unranked,
+    bankedScores: {},
   };
 }
 
@@ -185,6 +197,7 @@ export function createEmptyBoard(): RankForgeBoard {
     items: {},
     tierItems,
     unranked: [],
+    bankedScores: {},
   };
 }
 
@@ -275,7 +288,22 @@ export function normalizeBoard(input: unknown): RankForgeBoard {
       ) as string[]
     : [];
 
-  return { title, description, tiers, items, tierItems, unranked };
+  const bankedScores: Record<string, BankedScore> = {};
+  const bankedSrc = board.bankedScores;
+  if (bankedSrc && typeof bankedSrc === "object" && !Array.isArray(bankedSrc)) {
+    for (const [id, raw] of Object.entries(bankedSrc as Record<string, unknown>)) {
+      if (!raw || typeof raw !== "object") continue;
+      const b = raw as Record<string, unknown>;
+      const score = typeof b.score === "number" && isFinite(b.score) ? b.score : 0;
+      const itemCount =
+        typeof b.itemCount === "number" && isFinite(b.itemCount) ? b.itemCount : 0;
+      const name = typeof b.name === "string" ? b.name : "Player";
+      const color = typeof b.color === "string" ? b.color : "#64748b";
+      bankedScores[id] = { score, itemCount, name, color };
+    }
+  }
+
+  return { title, description, tiers, items, tierItems, unranked, bankedScores };
 }
 
 /** Pick a readable text color (white/near-black) for a given hex background. */

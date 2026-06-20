@@ -352,6 +352,7 @@ function BoardSection() {
       items: s.items,
       tierItems: s.tierItems,
       unranked: s.unranked,
+      bankedScores: s.bankedScores,
     };
   };
 

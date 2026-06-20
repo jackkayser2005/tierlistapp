@@ -8,10 +8,20 @@ import {
   createTierId,
   normalizeBoard,
   UNRANKED_ID,
+  type BankedScore,
   type RankForgeBoard,
   type Tier,
   type TierItem,
 } from "./tierlist";
+
+/** A player's contribution in the current round, banked when the round ends. */
+export interface RoundContribution {
+  id: string;
+  score: number;
+  itemCount: number;
+  name: string;
+  color: string;
+}
 
 interface RankForgeState extends RankForgeBoard {
   // ---- item actions ----
@@ -42,6 +52,15 @@ interface RankForgeState extends RankForgeBoard {
   resetBoard: () => void;
   newBoard: () => void;
   loadBoard: (board: RankForgeBoard) => void;
+
+  // ---- round / scoring actions ----
+  /** Bank the current round's contributions into cumulative totals, then clear
+   * all item assignments so the next round starts from zero round-points. */
+  bankRound: (contributions: RoundContribution[]) => void;
+  /** Wipe all banked totals (host only). */
+  resetScores: () => void;
+  /** Restore banked totals to a previous snapshot (used for undo). */
+  restoreScores: (banked: Record<string, BankedScore>) => void;
 
   // ---- selectors / helpers ----
   findContainerOf: (itemId: string) => string | null;
@@ -244,14 +263,18 @@ export const useRankForge = create<RankForgeState>()(
       setMeta: (patch) =>
         set((state) => ({ ...state, ...patch })),
 
+      // Swapping the board keeps the running tournament totals — only an
+      // explicit "Reset" (or End round) touches banked scores.
       resetBoard: () =>
-        set(() => ({
+        set((state) => ({
           ...createDefaultBoard(),
+          bankedScores: state.bankedScores,
         })),
 
       newBoard: () =>
-        set(() => ({
+        set((state) => ({
           ...createEmptyBoard(),
+          bankedScores: state.bankedScores,
         })),
 
       loadBoard: (board) =>
@@ -262,7 +285,42 @@ export const useRankForge = create<RankForgeState>()(
           items: board.items,
           tierItems: board.tierItems,
           unranked: board.unranked,
+          bankedScores: board.bankedScores ?? {},
         })),
+
+      bankRound: (contributions) =>
+        set((state) => {
+          const bankedScores: Record<string, BankedScore> = {};
+          for (const [id, b] of Object.entries(state.bankedScores)) {
+            bankedScores[id] = { ...b };
+          }
+          for (const c of contributions) {
+            if (c.score === 0 && c.itemCount === 0) continue;
+            const prev = bankedScores[c.id];
+            bankedScores[c.id] = {
+              score: (prev?.score ?? 0) + c.score,
+              itemCount: (prev?.itemCount ?? 0) + c.itemCount,
+              name: c.name,
+              color: c.color,
+            };
+          }
+          // Clear assignments so the next round's live points start at zero.
+          const items: Record<string, TierItem> = {};
+          for (const [id, item] of Object.entries(state.items)) {
+            if (item.assignedUserId) {
+              const next = { ...item };
+              delete next.assignedUserId;
+              items[id] = next;
+            } else {
+              items[id] = item;
+            }
+          }
+          return { items, bankedScores };
+        }),
+
+      resetScores: () => set(() => ({ bankedScores: {} })),
+
+      restoreScores: (banked) => set(() => ({ bankedScores: banked })),
 
       findContainerOf: (itemId) => {
         const state = get();
@@ -298,6 +356,7 @@ export const useRankForge = create<RankForgeState>()(
         items: state.items,
         tierItems: state.tierItems,
         unranked: state.unranked,
+        bankedScores: state.bankedScores,
       }),
       migrate: (persisted: unknown) => {
         try {

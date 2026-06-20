@@ -297,6 +297,23 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
         itemId: item.id,
         item,
       });
+
+      // Optimistically show the overlay for the host immediately — the server
+      // echo (vote:state) reconciles tallies a few ms later. This makes the
+      // window pop instantly and removes any dependency on the round-trip.
+      activeItemRef.current = item.id;
+      setMyVote(null);
+      myVoteRef.current = null;
+      setVote({
+        active: true,
+        itemId: item.id,
+        item,
+        tally: {},
+        voterCount: 0,
+        totalPeers: 0,
+        voters: [],
+      });
+
       logActivity("vote_started", item.label);
     },
     [logActivity]

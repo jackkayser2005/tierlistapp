@@ -36,6 +36,7 @@ export function Header({ onExportPng, exporting }: HeaderProps) {
       items: s.items,
       tierItems: s.tierItems,
       unranked: s.unranked,
+      bankedScores: s.bankedScores,
     };
     newBoard();
     toast.success("Started a fresh board", {
