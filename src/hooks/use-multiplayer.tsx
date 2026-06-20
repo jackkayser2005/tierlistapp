@@ -172,6 +172,8 @@ interface MultiplayerContextValue extends MultiplayerState {
   logActivity: (action: ActivityAction, detail: string) => void;
   setFocus: (itemId: string) => void;
   clearFocus: () => void;
+  /** Apply a store mutation without broadcasting to the room (for guest vote placement). */
+  applySilentUpdate: (fn: () => void) => void;
 }
 
 const MultiplayerContext = React.createContext<MultiplayerContextValue>({
@@ -193,6 +195,7 @@ const MultiplayerContext = React.createContext<MultiplayerContextValue>({
   logActivity: () => {},
   setFocus: () => {},
   clearFocus: () => {},
+  applySilentUpdate: (fn) => fn(),
 });
 
 // Activity lives in its own context so the (frequent) activity feed updates only
@@ -234,17 +237,36 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     setHydrated(true);
   }, []);
 
-  const updateUser = React.useCallback((patch: Partial<LocalUser>) => {
-    setUser((prev) => {
-      const next = { ...prev, ...patch };
-      saveLocalUser(next);
-      const sock = getSocket();
-      if (sock && next.name && next.color) {
-        sock.emit("identity", { name: next.name, color: next.color });
-      }
-      return next;
-    });
+  const applySilentUpdate = React.useCallback((fn: () => void) => {
+    suppressBroadcastRef.current = true;
+    fn();
+    setTimeout(() => {
+      suppressBroadcastRef.current = false;
+    }, 0);
   }, []);
+
+  const emitIdentity = React.useCallback((u: LocalUser) => {
+    const sock = getSocket();
+    if (sock && u.name && u.color) {
+      sock.emit("identity", {
+        identityId: u.id,
+        name: u.name,
+        color: u.color,
+      });
+    }
+  }, []);
+
+  const updateUser = React.useCallback(
+    (patch: Partial<LocalUser>) => {
+      setUser((prev) => {
+        const next = { ...prev, ...patch };
+        saveLocalUser(next);
+        emitIdentity(next);
+        return next;
+      });
+    },
+    [emitIdentity]
+  );
 
   // ---- Apply a remote board snapshot (suppresses rebroadcast) ----
   // Cheap: if the incoming board matches what we already have, do nothing — no
@@ -322,15 +344,14 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     socketRef.current = sock;
 
     const u = getLocalUser();
-    sock.emit("identity", { name: u.name, color: u.color });
+    emitIdentity(u);
 
     sock.off("disconnect").on("disconnect", () => {
       setState((s) => (s.status === "connected" ? { ...s, status: "connecting" } : s));
     });
 
     sock.io.off("reconnect").on("reconnect", () => {
-      const u2 = getLocalUser();
-      sock.emit("identity", { name: u2.name, color: u2.color });
+      emitIdentity(getLocalUser());
       const currentRoom = getRoomFromUrl();
       if (currentRoom) {
         sock.emit("room:join", { roomId: currentRoom });
@@ -339,7 +360,7 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     });
 
     return sock;
-  }, []);
+  }, [emitIdentity]);
 
   const handleState = React.useCallback(
     (payload: ServerRoomState, asHost: boolean) => {
@@ -393,15 +414,23 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
         });
       sock.off("presence:update").on(
         "presence:update",
-        (payload: { members: RoomUser[]; host: string | null; peers?: number }) => {
+        (payload: {
+          members: Array<RoomUser & { identityId?: string }>;
+          host: string | null;
+          peers?: number;
+        }) => {
           const s2 = getSocket();
           const myId = s2?.id ?? null;
+          const members: RoomUser[] = (payload.members ?? []).map((m) => ({
+            ...m,
+            identityId: m.identityId ?? m.id,
+          }));
           setState((s) => ({
             ...s,
-            members: payload.members ?? [],
+            members,
             hostId: payload.host ?? null,
             isHost: payload.host != null ? payload.host === myId : s.isHost,
-            peers: payload.peers ?? (payload.members?.length ?? 0),
+            peers: payload.peers ?? members.length,
           }));
         }
       );
@@ -427,6 +456,7 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
 
       const board = asHost ? snapshotBoard(useRankForge.getState()) : undefined;
       sock.emit("room:join", { roomId, board });
+      sock.emit("vote:sync-request", { roomId });
     },
     [connect, handleState, applyRemoteBoard]
   );
@@ -555,8 +585,9 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       logActivity,
       setFocus,
       clearFocus,
+      applySilentUpdate,
     }),
-    [state, hydrated, user, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity, setFocus, clearFocus]
+    [state, hydrated, user, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity, setFocus, clearFocus, applySilentUpdate]
   );
 
   return (

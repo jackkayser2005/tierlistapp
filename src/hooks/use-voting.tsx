@@ -18,7 +18,6 @@ export interface VoteState {
   tally: VoteTally;
   voterCount: number;
   totalPeers: number;
-  /** socket ids of members who have already cast a vote. */
   voters: string[];
 }
 
@@ -28,7 +27,6 @@ interface VoteResult {
   winner: string | null;
 }
 
-/** Winner celebration shown briefly after a vote ends. */
 export interface Celebration {
   itemId: string;
   itemName: string;
@@ -74,16 +72,72 @@ const VotingContext = React.createContext<VotingContextValue>({
   dismissCelebration: () => {},
 });
 
+/** Normalize a server vote:state payload into a typed client VoteState. */
+function normalizeVoteState(raw: unknown): VoteState {
+  if (!raw || typeof raw !== "object") return EMPTY_VOTE;
+  const p = raw as Record<string, unknown>;
+  if (!p.active) return EMPTY_VOTE;
+
+  const itemRaw = p.item;
+  let item: TierItem | null = null;
+  if (itemRaw && typeof itemRaw === "object" && !Array.isArray(itemRaw)) {
+    const it = itemRaw as Record<string, unknown>;
+    const id = typeof it.id === "string" ? it.id : String(p.itemId ?? "");
+    const label = typeof it.label === "string" ? it.label : "Item";
+    item = {
+      id,
+      type: it.type === "image" ? "image" : "text",
+      label,
+      ...(typeof it.imageUrl === "string" ? { imageUrl: it.imageUrl } : {}),
+    };
+  }
+
+  const tally: VoteTally = {};
+  if (p.tally && typeof p.tally === "object") {
+    for (const [k, v] of Object.entries(p.tally as Record<string, unknown>)) {
+      if (typeof v === "number") tally[k] = v;
+    }
+  }
+
+  return {
+    active: true,
+    itemId: typeof p.itemId === "string" ? p.itemId : null,
+    item,
+    tally,
+    voterCount: typeof p.voterCount === "number" ? p.voterCount : 0,
+    totalPeers: typeof p.totalPeers === "number" ? p.totalPeers : 0,
+    voters: Array.isArray(p.voters)
+      ? (p.voters as unknown[]).filter((v): v is string => typeof v === "string")
+      : [],
+  };
+}
+
+function summarizeTally(
+  tally: VoteTally,
+  tiers: { id: string; name: string }[]
+): string {
+  const parts = Object.entries(tally)
+    .map(([tierId, count]) => {
+      const t = tiers.find((x) => x.id === tierId);
+      return `${t?.name ?? tierId}: ${count}`;
+    })
+    .join("  ·  ");
+  return parts || "No votes cast";
+}
+
 export function VotingProvider({ children }: { children: React.ReactNode }) {
-  const { status, roomId, isHost, logActivity, setPresence } = useMultiplayer();
+  const { status, roomId, isHost, logActivity, setPresence, applySilentUpdate } =
+    useMultiplayer();
   const [vote, setVote] = React.useState<VoteState>(EMPTY_VOTE);
   const [myVote, setMyVote] = React.useState<string | null>(null);
   const [celebration, setCelebration] = React.useState<Celebration | null>(null);
 
-  // Refs to avoid stale closures inside socket listeners.
   const isHostRef = React.useRef(isHost);
   const roomIdRef = React.useRef(roomId);
-  const votedItemRef = React.useRef<string | null>(null);
+  const myVoteRef = React.useRef<string | null>(null);
+  const activeItemRef = React.useRef<string | null>(null);
+  const voteRef = React.useRef(vote);
+  voteRef.current = vote;
   const celebrationTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
@@ -92,12 +146,9 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     roomIdRef.current = roomId;
   }, [roomId]);
-
-  // Subscribe to store values via refs so listeners don't re-bind on every change.
-  const store = useRankForge;
-  const moveItem = React.useCallback((id: string, from: string, to: string) => {
-    store.getState().moveItem(id, from, to, -1);
-  }, []);
+  React.useEffect(() => {
+    myVoteRef.current = myVote;
+  }, [myVote]);
 
   const dismissCelebration = React.useCallback(() => {
     if (celebrationTimerRef.current) {
@@ -107,62 +158,87 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
     setCelebration(null);
   }, []);
 
-  // ---- Single set of socket listeners, bound once per connection ----
+  const placeWinner = React.useCallback(
+    (itemId: string, winnerTierId: string) => {
+      const s = useRankForge.getState();
+      const fromContainer = s.findContainerOf(itemId);
+      if (!fromContainer || fromContainer === winnerTierId) return;
+
+      const apply = () => {
+        s.moveItem(itemId, fromContainer, winnerTierId, -1);
+      };
+
+      if (isHostRef.current) {
+        apply();
+      } else {
+        applySilentUpdate(apply);
+      }
+    },
+    [applySilentUpdate]
+  );
+
+  // ---- Socket listeners: register BEFORE any sync emit (fixes race) ----
   React.useEffect(() => {
-    if (status !== "connected") {
+    if (status !== "connected" || !roomId) {
       setVote(EMPTY_VOTE);
       setMyVote(null);
-      votedItemRef.current = null;
+      myVoteRef.current = null;
+      activeItemRef.current = null;
       return;
     }
+
     const sock = getSocket();
     if (!sock) return;
 
-    // Request current vote state on connect.
-    if (roomIdRef.current) {
-      sock.emit("vote:sync-request", { roomId: roomIdRef.current });
-    }
-
-    const onState = (payload: VoteState) => {
-      if (!payload || !payload.active) {
+    const onState = (payload: unknown) => {
+      const next = normalizeVoteState(payload);
+      if (!next.active) {
         setVote(EMPTY_VOTE);
         setMyVote(null);
-        votedItemRef.current = null;
+        myVoteRef.current = null;
+        activeItemRef.current = null;
         setPresence("online");
         return;
       }
-      setVote(payload);
+
+      setVote(next);
       setPresence("voting");
-      if (votedItemRef.current !== payload.itemId) {
-        votedItemRef.current = payload.itemId;
+
+      // Reset my pick when a new item is up for vote.
+      if (activeItemRef.current !== next.itemId) {
+        activeItemRef.current = next.itemId;
         setMyVote(null);
+        myVoteRef.current = null;
+      }
+
+      // Reconcile myVote from server voters list when we have a socket id.
+      const mySocketId = sock.id;
+      if (mySocketId && next.voters.includes(mySocketId) && !myVoteRef.current) {
+        // Server doesn't echo tier choice in vote:state — keep local myVote if set.
       }
     };
 
     const onResult = (payload: VoteResult) => {
       setVote(EMPTY_VOTE);
       setMyVote(null);
-      votedItemRef.current = null;
+      myVoteRef.current = null;
+      activeItemRef.current = null;
       setPresence("online");
 
-      const s = store.getState();
+      const s = useRankForge.getState();
       const winnerTier = s.tiers.find((t) => t.id === payload.winner);
       const itemName = s.items[payload.itemId]?.label ?? "Item";
 
-      // Host applies placement (single board sync).
-      if (isHostRef.current && payload.winner) {
-        const fromContainer = s.findContainerOf(payload.itemId);
-        if (fromContainer && fromContainer !== payload.winner) {
-          moveItem(payload.itemId, fromContainer, payload.winner);
+      if (payload.winner) {
+        placeWinner(payload.itemId, payload.winner);
+
+        if (isHostRef.current) {
           toast.success(`"${itemName}" → ${winnerTier?.name ?? "tier"}`, {
             description: summarizeTally(payload.tally, s.tiers),
           });
           logActivity("vote_ended", `${itemName} → ${winnerTier?.name ?? "tier"}`);
         }
-      }
 
-      // Show a winner celebration for everyone.
-      if (payload.winner) {
         setCelebration({
           itemId: payload.itemId,
           itemName,
@@ -176,6 +252,8 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
           setCelebration(null);
           celebrationTimerRef.current = null;
         }, 2800);
+      } else if (isHostRef.current) {
+        toast("Vote ended with no votes", { description: itemName });
       }
     };
 
@@ -189,67 +267,87 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
     sock.on("vote:result", onResult);
     sock.on("room:error", onError);
 
+    // Sync AFTER listeners are attached.
+    sock.emit("vote:sync-request", { roomId });
+
     return () => {
       sock.off("vote:state", onState);
       sock.off("vote:result", onResult);
       sock.off("room:error", onError);
     };
-    // Bind only to `status` and `roomId` — everything else uses refs.
-  }, [status, roomId]);
+  }, [status, roomId, setPresence, logActivity, placeWinner]);
 
-  // ---- Actions ----
   const startVote = React.useCallback(
     (item: TierItem) => {
-      if (!roomIdRef.current || !isHostRef.current) {
+      if (!roomIdRef.current) {
+        toast.error("Join a room first");
+        return;
+      }
+      if (!isHostRef.current) {
         toast.error("Only the host can start a vote");
         return;
       }
       const sock = getSocket();
-      sock?.emit("vote:start", { roomId: roomIdRef.current, itemId: item.id, item });
+      if (!sock?.connected) {
+        toast.error("Not connected to the room server");
+        return;
+      }
+      sock.emit("vote:start", {
+        roomId: roomIdRef.current,
+        itemId: item.id,
+        item,
+      });
       logActivity("vote_started", item.label);
     },
     [logActivity]
   );
 
-  // Host helper: start a vote on the next item still sitting in Unranked.
   const startNextVote = React.useCallback(() => {
-    if (!roomIdRef.current || !isHostRef.current) {
+    if (!isHostRef.current) {
       toast.error("Only the host can start a vote");
       return;
     }
-    const s = store.getState();
+    const s = useRankForge.getState();
     const nextId = s.unranked[0];
     const item = nextId ? s.items[nextId] : null;
     if (!item) {
       toast("Nothing left to vote on", {
-        description: "The Unranked pool is empty.",
+        description: "Add items to Unranked first.",
       });
       return;
     }
     startVote(item);
-    toast("Vote started", { description: item.label });
   }, [startVote]);
 
   const castVote = React.useCallback(
     (tierId: string) => {
-      if (!roomIdRef.current) return;
-      // Read current vote state from a ref to avoid stale closures.
-      setVote((current) => {
-        if (!current.active || !current.itemId) return current;
-        votedItemRef.current = current.itemId;
-        const sock = getSocket();
-        sock?.emit("vote:cast", {
-          roomId: roomIdRef.current,
-          itemId: current.itemId,
-          tierId,
-        });
-        const s = store.getState();
-        const tierName = s.tiers.find((t) => t.id === tierId)?.name ?? tierId;
-        const itemName = current.item?.label ?? "item";
-        logActivity("voted", `${tierName} for ${itemName}`);
-        return current;
+      const rid = roomIdRef.current;
+      if (!rid) return;
+
+      const current =
+        activeItemRef.current ?? voteRef.current.itemId ?? null;
+      if (!current || !voteRef.current.active) return;
+
+      const sock = getSocket();
+      if (!sock?.connected) {
+        toast.error("Lost connection — reconnecting…");
+        return;
+      }
+
+      sock.emit("vote:cast", {
+        roomId: rid,
+        itemId: current,
+        tierId,
       });
+
+      activeItemRef.current = current;
       setMyVote(tierId);
+      myVoteRef.current = tierId;
+
+      const s = useRankForge.getState();
+      const tierName = s.tiers.find((t) => t.id === tierId)?.name ?? tierId;
+      const itemName = s.items[current]?.label ?? "item";
+      logActivity("voted", `${tierName} for ${itemName}`);
     },
     [logActivity]
   );
@@ -259,14 +357,12 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
       toast.error("Only the host can end the vote");
       return;
     }
-    const sock = getSocket();
-    sock?.emit("vote:end", { roomId: roomIdRef.current });
+    getSocket()?.emit("vote:end", { roomId: roomIdRef.current });
   }, []);
 
   const cancelVote = React.useCallback(() => {
     if (!roomIdRef.current || !isHostRef.current) return;
-    const sock = getSocket();
-    sock?.emit("vote:cancel", { roomId: roomIdRef.current });
+    getSocket()?.emit("vote:cancel", { roomId: roomIdRef.current });
     logActivity("vote_cancelled", "");
   }, [logActivity]);
 
@@ -283,7 +379,18 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
       cancelVote,
       dismissCelebration,
     }),
-    [vote, myVote, celebration, isHost, startVote, startNextVote, castVote, endVote, cancelVote, dismissCelebration]
+    [
+      vote,
+      myVote,
+      celebration,
+      isHost,
+      startVote,
+      startNextVote,
+      castVote,
+      endVote,
+      cancelVote,
+      dismissCelebration,
+    ]
   );
 
   return (
@@ -291,20 +398,6 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Consume shared voting state. Must be used inside VotingProvider. */
 export function useVoting() {
   return React.useContext(VotingContext);
-}
-
-function summarizeTally(
-  tally: VoteTally,
-  tiers: { id: string; name: string }[]
-): string {
-  const parts = Object.entries(tally)
-    .map(([tierId, count]) => {
-      const t = tiers.find((x) => x.id === tierId);
-      return `${t?.name ?? tierId}: ${count}`;
-    })
-    .join("  ·  ");
-  return parts || "No votes cast";
 }

@@ -47,6 +47,7 @@ type Board = Record<string, unknown> | null
 /** A user present in a room. `id` is the socket id (unique per connection). */
 interface User {
   id: string // socket id
+  identityId: string // stable client id (localStorage) for assignment / scoring
   name: string // display name, max 20 chars
   color: string // hex color for avatar, e.g. "#f43f5e"
   presence: 'online' | 'idle' | 'dragging' | 'voting'
@@ -385,15 +386,19 @@ io.on('connection', (socket: Socket) => {
   // "pending" socket (connected but not a member of any room).
   socket.on('identity', (payload: unknown) => {
     try {
-      const data = (payload ?? {}) as { name?: string; color?: string }
+      const data = (payload ?? {}) as { name?: string; color?: string; identityId?: string }
       let name = typeof data.name === 'string' ? data.name.trim().slice(0, 20) : ''
       if (!name) name = 'Guest'
       const color =
         typeof data.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(data.color)
           ? data.color
           : '#64748b'
-      socket.data.identity = { name, color }
-      console.log(`[identity] ${socket.id} name=${name} color=${color}`)
+      const identityId =
+        typeof data.identityId === 'string' && data.identityId.trim()
+          ? data.identityId.trim().slice(0, 64)
+          : socket.id
+      socket.data.identity = { name, color, identityId }
+      console.log(`[identity] ${socket.id} name=${name} color=${color} identityId=${identityId}`)
     } catch (err) {
       console.error(`[identity] error from ${socket.id}:`, err)
     }
@@ -450,13 +455,15 @@ io.on('connection', (socket: Socket) => {
 
       // Read identity (set via `identity` event; default to Guest/#64748b).
       const identity =
-        (socket.data?.identity as { name: string; color: string } | undefined) ?? {
+        (socket.data?.identity as { name: string; color: string; identityId?: string } | undefined) ?? {
           name: 'Guest',
           color: '#64748b',
+          identityId: socket.id,
         }
 
       const user: User = {
         id: socket.id,
+        identityId: identity.identityId ?? socket.id,
         name: identity.name,
         color: identity.color,
         presence: 'online',
@@ -805,6 +812,7 @@ io.on('connection', (socket: Socket) => {
       const room = rooms.get(roomId)
       if (!room || !room.vote) return
       if (room.vote.itemId !== itemId) return // stale vote
+      if (!room.members.has(socket.id)) return // must be a room member
 
       room.vote.votes.set(socket.id, tierId)
       io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))

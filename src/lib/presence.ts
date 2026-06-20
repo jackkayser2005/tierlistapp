@@ -2,7 +2,10 @@
 
 /** User presence as tracked by the server and broadcast to the room. */
 export interface RoomUser {
+  /** Ephemeral socket id — changes every reconnect. Used for vote voter strip. */
   id: string;
+  /** Stable id from the client's localStorage — use for item assignment & scoring. */
+  identityId: string;
   name: string;
   color: string;
   presence: "online" | "idle" | "dragging" | "voting";
@@ -74,4 +77,9 @@ export const ACTIVITY_META: Record<
 
 export function formatActivity(entry: ActivityEntry): string {
   return ACTIVITY_META[entry.action]?.label(entry.userName, entry.detail) ?? "";
+}
+
+/** Stable key for matching room members to assigned items / leaderboard rows. */
+export function memberKey(member: Pick<RoomUser, "identityId" | "id">): string {
+  return member.identityId || member.id;
 }

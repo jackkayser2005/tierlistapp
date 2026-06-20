@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { useRankForge } from "@/lib/store";
 import { UNRANKED_ID, type TierItem } from "@/lib/tierlist";
 import { useMultiplayer, useItemFocus } from "@/hooks/use-multiplayer";
+import { memberKey } from "@/lib/presence";
 import { useVotingMode } from "./voting-context";
 import { VoteButton } from "./voting-overlay";
 import { toast } from "sonner";
@@ -168,7 +169,9 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
   const { setFocus, clearFocus, status, members, logActivity } = useMultiplayer();
   const focus = useItemFocus(item.id);
   const assignedMember = item.assignedUserId
-    ? members.find((m) => m.id === item.assignedUserId)
+    ? members.find(
+        (m) => memberKey(m) === item.assignedUserId || m.id === item.assignedUserId
+      )
     : undefined;
   const [editOpen, setEditOpen] = React.useState(false);
   const [assignOpen, setAssignOpen] = React.useState(false);
@@ -231,6 +234,9 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
           focusName={focusName}
           assignedAvatarColor={assignedMember?.color}
           assignedAvatarName={assignedMember?.name}
+          assignedAvatarUrl={
+            item.type === "image" && item.imageUrl ? item.imageUrl : undefined
+          }
         />
       </div>
 
@@ -333,12 +339,13 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
                   <button
                     key={m.id}
                     onClick={() => {
-                      assignItem(item.id, m.id);
+                      assignItem(item.id, memberKey(m));
                       setAssignOpen(false);
+                      toast.success(`Assigned to ${m.name}`);
                     }}
                     className={cn(
                       "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-white/[0.06]",
-                      item.assignedUserId === m.id && "bg-white/[0.04]"
+                      item.assignedUserId === memberKey(m) && "bg-white/[0.04]"
                     )}
                   >
                     <span
