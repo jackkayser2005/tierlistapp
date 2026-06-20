@@ -7,8 +7,7 @@ import {
   formatActivity,
   type ActivityEntry,
 } from "@/lib/presence";
-import { useMultiplayer } from "@/hooks/use-multiplayer";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { useMultiplayer, useActivityLog } from "@/hooks/use-multiplayer";
 
 function timeAgo(ts: number): string {
   const s = Math.floor((Date.now() - ts) / 1000);
@@ -35,7 +34,8 @@ function ActivityIcon({ action }: { action: ActivityEntry["action"] }) {
 }
 
 export function ActivityFeed({ className }: { className?: string }) {
-  const { activity, status } = useMultiplayer();
+  const { status } = useMultiplayer();
+  const activity = useActivityLog();
   const reversed = React.useMemo(() => [...activity].reverse(), [activity]);
 
   if (status !== "connected") return null;

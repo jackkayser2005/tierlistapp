@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { Flame, SlidersHorizontal } from "lucide-react";
+import { Flame, SlidersHorizontal, ImageDown, FilePlus } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -10,6 +11,8 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { useRankForge } from "@/lib/store";
+import type { RankForgeBoard } from "@/lib/tierlist";
 import { ThemeToggle } from "./theme-toggle";
 import { PresenceChip } from "./multiplayer-panel";
 import { ControlPanelContent } from "./control-panel";
@@ -21,6 +24,26 @@ interface HeaderProps {
 
 export function Header({ onExportPng, exporting }: HeaderProps) {
   const [panelOpen, setPanelOpen] = React.useState(false);
+  const newBoard = useRankForge((s) => s.newBoard);
+  const loadBoard = useRankForge((s) => s.loadBoard);
+
+  const handleNewBoard = () => {
+    const s = useRankForge.getState();
+    const prev: RankForgeBoard = {
+      title: s.title,
+      description: s.description,
+      tiers: s.tiers,
+      items: s.items,
+      tierItems: s.tierItems,
+      unranked: s.unranked,
+    };
+    newBoard();
+    toast.success("Started a fresh board", {
+      description: "Empty S–D tiers, ready to fill.",
+      action: { label: "Undo", onClick: () => loadBoard(prev) },
+      duration: 6000,
+    });
+  };
 
   return (
     <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-background/70 backdrop-blur-xl">
@@ -44,13 +67,24 @@ export function Header({ onExportPng, exporting }: HeaderProps) {
         <div className="flex items-center gap-2">
           <PresenceChip />
           <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleNewBoard}
+            className="hidden gap-1.5 text-muted-foreground hover:text-foreground sm:inline-flex"
+            title="Start a fresh, empty board"
+          >
+            <FilePlus className="size-4" />
+            New
+          </Button>
+          <Button
             variant="outline"
             size="sm"
             onClick={onExportPng}
             disabled={exporting}
-            className="hidden sm:inline-flex"
+            className="hidden gap-1.5 sm:inline-flex"
           >
-            Export PNG
+            <ImageDown className="size-4" />
+            {exporting ? "Rendering…" : "Export PNG"}
           </Button>
           <ThemeToggle />
           {/* Mobile panel trigger */}

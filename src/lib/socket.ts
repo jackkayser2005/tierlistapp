@@ -17,14 +17,26 @@ export function ensureSocket(): Socket {
   if (socket) return socket;
   const url = process.env.NEXT_PUBLIC_ROOM_SERVICE_URL || null;
   const target = url ?? "/?XTransformPort=3003";
+
+  // Transport selection:
+  //  - Production (NEXT_PUBLIC_ROOM_SERVICE_URL set) is a DIRECT connection to
+  //    the hosted room service, so we go websocket-first for the lowest latency
+  //    (no long-polling round-trips). We keep polling as a fallback for
+  //    networks/proxies that block raw WS.
+  //  - Local dev goes through the Caddy gateway, which historically does not
+  //    forward the WS upgrade reliably, so we connect polling-first and let
+  //    socket.io upgrade to websocket opportunistically.
+  const isDirect = !!url;
   socket = io(target, {
     path: "/",
-    transports: ["polling", "websocket"],
+    transports: isDirect ? ["websocket", "polling"] : ["polling", "websocket"],
     upgrade: true,
-    rememberUpgrade: false,
+    rememberUpgrade: isDirect,
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 800,
+    reconnectionDelayMax: 4000,
+    timeout: 12000,
   });
   return socket;
 }

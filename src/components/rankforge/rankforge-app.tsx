@@ -34,7 +34,6 @@ import { ActivityFeed } from "./activity-feed";
 import { DragOverlayCard } from "./item-card";
 import { VotingModeProvider } from "./voting-context";
 import { VotingOverlay } from "./voting-overlay";
-import { LiveCursors } from "./live-cursors";
 import { Leaderboard } from "./leaderboard";
 
 /**
@@ -291,7 +290,6 @@ function RankForgeInner() {
           </DndContext>
 
           <VotingOverlay />
-          <LiveCursors />
 
           <footer className="mt-auto border-t border-white/[0.06] bg-background/40 backdrop-blur">
             <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-5 text-xs text-muted-foreground sm:flex-row sm:px-6">

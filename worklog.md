@@ -453,3 +453,60 @@ Stage Summary:
 - FIXED: Undo from unranked now properly restores the exact item (same ID, assignedUserId, imageUrl, position).
 - FIXED: Items can be permanently deleted from Unranked (not just soft-deleted).
 - Design unchanged (user confirmed they like it).
+
+---
+Task ID: 12
+Agent: full-stack-developer
+Task: Full production-readiness audit-and-polish pass — remove live-cursor viewing, improve websocket throughput + scaling for ~10 concurrent users, greatly enhance UI/UX (especially the voting flow), and harden for production.
+
+Work Log:
+- **Removed the live-cursor feature entirely** (user explicitly asked to remove cursor viewing):
+  - Deleted `src/components/rankforge/live-cursors.tsx` and its import + `<LiveCursors />` usage in `rankforge-app.tsx`.
+  - Removed all cursor plumbing from `use-multiplayer.tsx`: the `CursorInfo` type, `cursors` state, `cursorTimersRef`, the `cursor:move`/`cursor:clear` listeners, and `moveCursor`/`sendCursor`/`cursorRafRef`/`cursorPendingRef` + the `cursors`/`moveCursor` context fields.
+  - Removed the `cursor:move` and `cursor:clear` handlers from `mini-services/room-service/index.ts` and the `cursor:clear` emit in the disconnect handler. Focus relay (`focus:set`/`focus:clear`) kept intact (kept cheap; throttled 250ms client-side).
+  - Grepped the whole repo for `cursor` — only CSS `cursor:`/`cursor-*` utility classes remain (no feature code).
+- **WebSocket performance + "many users" scaling:**
+  - **Transport selection (`src/lib/socket.ts`)**: production path (`NEXT_PUBLIC_ROOM_SERVICE_URL` set = direct connection) now connects **websocket-first** with `rememberUpgrade: true` for lowest latency; local Caddy path stays **polling-first** (gateway doesn't reliably forward the WS upgrade) but still upgrades opportunistically. Added `reconnectionDelayMax` + `timeout`. Before: always polling-first even in prod (long-poll latency on a direct WS-capable link). After: prod gets true low-latency WS.
+  - **Cheap `applyRemoteBoard`**: now normalizes once, computes a signature, and **skips the store write + React re-render entirely if the incoming board matches current state** (`sig === lastSigRef`). Before: every `board:update` re-parsed + `loadBoard`'d + re-stringified, re-rendering the whole board even for no-op/echo updates. With many simultaneous draggers this removes redundant O(N²) full-board churn.
+  - **eventId echo-skip**: client tracks recently-sent `eventId`s (bounded Set) and ignores its own echoed `board:update` as a safety net (server already doesn't self-echo).
+  - **Board broadcast debounce** bumped 120ms → 140ms; still signature-deduped (no emit when nothing actually changed) and trailing (sends the latest snapshot).
+  - **Re-render isolation (the big scaling win):** split the one giant multiplayer context so frequent events don't re-render the whole tree:
+    - `activity` moved to its own `ActivityContext` (`useActivityLog`) — the high-frequency activity feed updates now re-render ONLY the feed, not every card.
+    - Focus highlights moved to a module-level external store consumed per-item via `useItemFocus(itemId)` + `useSyncExternalStore` — a focus change re-renders ONLY the focused card, not all N cards.
+    - Memoized the presentational `ItemCardView` (`React.memo`) so presence/members churn doesn't re-diff every card's visual.
+  - Heartbeat (20s client / 45s server) and presence throttle (400ms) left as-is (verified sane).
+- **UI/UX + voting overhaul:**
+  - Design system refresh in `globals.css`: layered ambient glows (indigo/violet/magenta) + deeper panels with stronger depth shadows, more vivid indigo→violet brand gradient + brand-text, punchier primary button glow. Kept the production-grade "Slate" base.
+  - Header: Export PNG button now has an icon + "Rendering…" busy state.
+  - **Voting (the #1 friction point):**
+    - Added `voters: string[]` to the server `vote:state` payload (socket ids of who has voted) — consistent on both client + server.
+    - New `VoterStrip` in the overlay shows every member as an avatar: voted = full-color with a green check ring, not-yet-voted = dimmed + pulsing. Crystal-clear "who has/hasn't voted".
+    - Overlay header reworked ("Group vote", bold X-of-Y tally), End & place button pulses (`rf-glow`) once everyone has voted, non-host shows a clear "Host closes it" waiting chip, my-pick highlighting + "Locked in — tap another tier to change" copy.
+    - Added an **auto-advance loop**: `startNextVote()` in the voting context (used by the sidebar control AND a new host-only "Vote next →" button on the celebration overlay) starts a vote on the next Unranked item in one tap.
+    - Crisper celebration: shortened auto-dismiss 3.5s → 2.8s, host gets "Done" / "Vote next →" actions, clicking the card no longer dismisses (only the backdrop / Done does).
+    - `voting-controls.tsx` simplified to use the shared `startNextVote` (removed duplicated logic + unused Tooltip/cn/toast imports).
+- **Production fixes:**
+  - Fixed a latent type bug: `store.addTier()` created a `Tier` without the required `points` field — now sets `points: 1` (keeps leaderboard scoring monotonic).
+  - Updated `HOSTING.md`: the socket URL is already env-driven (no manual code edit needed) and documents the prod=websocket-first / local=polling-first behavior.
+
+Verification:
+- Static verification performed: full repo grep for `cursor` (only CSS utilities remain), grep for removed context fields (`cursors`/`moveCursor`/`focuses`/`LiveCursors`/`CursorInfo` — none dangling), and a manual type/import review of every changed file (use-multiplayer, use-voting, voting-overlay, voting-controls, item-card, activity-feed, socket, store, room-service).
+- NOT YET RUN: `next build`, `bun run lint`, the room-service `bun build` typecheck, service restart, and the 2-tab browser end-to-end (drag/sync/full voting round/screenshots). The execution backend (shell) and the browser MCP were both unavailable for the entire session ("returned no exit status" / "No browser tab available"), so these could not be executed. The protocol change (`voters` field) is additive and backward-compatible, and the client no longer listens to cursor events, so the app degrades gracefully even against an un-restarted server. These commands still need to be run once the environment recovers:
+  - `bunx next build` (or `npx next build`) from repo root
+  - `bun run lint`
+  - `cd mini-services/room-service && bun build index.ts --target=bun --outfile=<tmp>`
+  - restart the room-service (kill stale `bun --hot index.ts`, relaunch) and 2-tab browser smoke test.
+
+Files Modified:
+- `src/lib/socket.ts`, `src/hooks/use-multiplayer.tsx` (rewrite), `src/hooks/use-voting.tsx`, `src/lib/store.ts`
+- `src/components/rankforge/rankforge-app.tsx`, `item-card.tsx`, `activity-feed.tsx`, `voting-overlay.tsx` (rewrite), `voting-controls.tsx` (rewrite), `header.tsx`
+- `src/app/globals.css`
+- `mini-services/room-service/index.ts`
+- `HOSTING.md`
+- Deleted: `src/components/rankforge/live-cursors.tsx`
+
+Stage Summary:
+- REMOVED: live-cursor viewing (client + server, fully).
+- FASTER/SCALABLE: prod websocket-first transport; no-op board updates skip re-render; activity + focus pulled out of the global re-render path (feed-only / per-card updates); memoized cards; signature-deduped, debounced board broadcasts.
+- BETTER UX: refreshed vivid theme + depth, and a much clearer voting flow — live "who voted" avatars, pulsing End-when-ready, one-tap "Vote next" auto-advance, crisper celebration.
+- PROD: fixed `addTier` points type bug; env-driven socket URL documented. Build/lint/typecheck/browser verification still pending due to an unavailable execution backend this session.

@@ -2,26 +2,18 @@
 
 import * as React from "react";
 import { Vote as VoteIcon, Zap, Info } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { useMultiplayer } from "@/hooks/use-multiplayer";
 import { useVoting } from "@/hooks/use-voting";
 import { useRankForge } from "@/lib/store";
 import { useVotingMode } from "./voting-context";
-import { toast } from "sonner";
 
 export function VotingControls() {
   const { status, isHost } = useMultiplayer();
-  const { vote, startVote, endVote, cancelVote } = useVoting();
+  const { vote, startNextVote, endVote, cancelVote } = useVoting();
   const { votingMode, setVotingMode } = useVotingMode();
   const unranked = useRankForge((s) => s.unranked);
-  const items = useRankForge((s) => s.items);
 
   if (status !== "connected") {
     return (
@@ -34,19 +26,6 @@ export function VotingControls() {
       </div>
     );
   }
-
-  const startNextVote = () => {
-    const nextId = unranked[0];
-    const item = nextId ? items[nextId] : null;
-    if (!item) {
-      toast("Nothing left to vote on", {
-        description: "The Unranked pool is empty.",
-      });
-      return;
-    }
-    startVote(item);
-    toast("Vote started", { description: item.label });
-  };
 
   return (
     <div className="space-y-3">
@@ -87,11 +66,7 @@ export function VotingControls() {
             >
               Cancel vote
             </Button>
-            <Button
-              size="sm"
-              className="rf-btn-accent"
-              onClick={endVote}
-            >
+            <Button size="sm" className="rf-btn-accent" onClick={endVote}>
               <Zap className="size-3.5" /> End &amp; place
             </Button>
           </div>
@@ -118,7 +93,9 @@ export function VotingControls() {
 
       {votingMode ? (
         <p className="text-[11px] leading-relaxed text-muted-foreground/70">
-          Hover any card and tap <span className="font-semibold text-foreground/70">Vote</span> to put it up for a group vote.
+          Hover any card and tap{" "}
+          <span className="font-semibold text-foreground/70">Vote</span> to put
+          it up for a group vote.
         </p>
       ) : null}
     </div>

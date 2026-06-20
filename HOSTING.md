@@ -14,13 +14,17 @@ The room service is a tiny Node/Bun server in `mini-services/room-service/`.
 
 ### Option A: Render (recommended, easiest)
 
+The room-service now runs on plain **Node** (via `tsx`) and binds to Render's
+`$PORT` automatically — no code changes needed.
+
 1. Push your project to GitHub.
 2. Go to [render.com](https://render.com) → New → Web Service.
 3. Connect your GitHub repo.
 4. Settings:
    - **Root Directory**: `mini-services/room-service`
-   - **Build Command**: `bun install` (or `npm install`)
-   - **Start Command**: `bun run index.ts` (or `node index.js` after `npm install`)
+   - **Runtime**: Node
+   - **Build Command**: `npm install`
+   - **Start Command**: `npm start`  (runs `tsx index.ts`)
    - **Plan**: Free
 5. Deploy. You'll get a URL like `https://rankforge-room.onrender.com`.
 6. Note that URL — you'll need it in Step 2.
@@ -52,30 +56,21 @@ fly deploy
    - Value: your backend URL from Step 1 (e.g. `https://rankforge-room.onrender.com`)
 5. Deploy. You'll get a URL like `https://rankforge.vercel.app`.
 
-### Important: update the socket URL
+### The socket URL is already wired up
 
-In `src/lib/socket.ts`, the `ensureSocket()` function currently connects via the
-Caddy gateway (`io("/?XTransformPort=3003")`). For production, change it to
-read from the environment variable:
+No code change is needed. `src/lib/socket.ts` reads
+`NEXT_PUBLIC_ROOM_SERVICE_URL` automatically:
 
-```ts
-export function ensureSocket(): Socket {
-  if (socket) return socket;
-  const url = process.env.NEXT_PUBLIC_ROOM_SERVICE_URL;
-  socket = io(url || "/?XTransformPort=3003", {
-    path: "/",
-    transports: ["websocket", "polling"],
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 800,
-  });
-  return socket;
-}
-```
+- When the env var **is set** (production on Vercel), it connects **directly** to
+  your hosted backend and prefers the **websocket** transport first for the
+  lowest latency (falling back to long-polling only if WS is blocked).
+- When the env var is **not set** (local dev), it connects through the Caddy
+  gateway (`/?XTransformPort=3003`) **polling-first**, because the local gateway
+  does not reliably forward the WebSocket upgrade. socket.io still upgrades to
+  WS opportunistically.
 
-When `NEXT_PUBLIC_ROOM_SERVICE_URL` is set (on Vercel), it connects directly to
-your hosted backend. When it's not set (local dev), it falls back to the Caddy
-gateway.
+So the only production step is setting `NEXT_PUBLIC_ROOM_SERVICE_URL` in Vercel
+(Step 2 above) — the client picks the right transport on its own.
 
 ---
 

@@ -18,6 +18,8 @@ export interface VoteState {
   tally: VoteTally;
   voterCount: number;
   totalPeers: number;
+  /** socket ids of members who have already cast a vote. */
+  voters: string[];
 }
 
 interface VoteResult {
@@ -43,6 +45,7 @@ const EMPTY_VOTE: VoteState = {
   tally: {},
   voterCount: 0,
   totalPeers: 0,
+  voters: [],
 };
 
 interface VotingContextValue {
@@ -51,6 +54,7 @@ interface VotingContextValue {
   celebration: Celebration | null;
   canControl: boolean;
   startVote: (item: TierItem) => void;
+  startNextVote: () => void;
   castVote: (tierId: string) => void;
   endVote: () => void;
   cancelVote: () => void;
@@ -63,6 +67,7 @@ const VotingContext = React.createContext<VotingContextValue>({
   celebration: null,
   canControl: false,
   startVote: () => {},
+  startNextVote: () => {},
   castVote: () => {},
   endVote: () => {},
   cancelVote: () => {},
@@ -170,7 +175,7 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
         celebrationTimerRef.current = setTimeout(() => {
           setCelebration(null);
           celebrationTimerRef.current = null;
-        }, 3500);
+        }, 2800);
       }
     };
 
@@ -205,6 +210,25 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
     },
     [logActivity]
   );
+
+  // Host helper: start a vote on the next item still sitting in Unranked.
+  const startNextVote = React.useCallback(() => {
+    if (!roomIdRef.current || !isHostRef.current) {
+      toast.error("Only the host can start a vote");
+      return;
+    }
+    const s = store.getState();
+    const nextId = s.unranked[0];
+    const item = nextId ? s.items[nextId] : null;
+    if (!item) {
+      toast("Nothing left to vote on", {
+        description: "The Unranked pool is empty.",
+      });
+      return;
+    }
+    startVote(item);
+    toast("Vote started", { description: item.label });
+  }, [startVote]);
 
   const castVote = React.useCallback(
     (tierId: string) => {
@@ -253,12 +277,13 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
       celebration,
       canControl: isHost,
       startVote,
+      startNextVote,
       castVote,
       endVote,
       cancelVote,
       dismissCelebration,
     }),
-    [vote, myVote, celebration, isHost, startVote, castVote, endVote, cancelVote, dismissCelebration]
+    [vote, myVote, celebration, isHost, startVote, startNextVote, castVote, endVote, cancelVote, dismissCelebration]
   );
 
   return (

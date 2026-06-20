@@ -13,10 +13,8 @@ import {
   ClipboardCopy,
   FolderOpen,
   RotateCcw,
-  Palette,
-  Layers,
+  FilePlus,
   Image as ImageIcon,
-  FileJson,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -28,17 +26,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { useRankForge, buildExport } from "@/lib/store";
 import { normalizeBoard, type RankForgeBoard } from "@/lib/tierlist";
 import { useMultiplayer } from "@/hooks/use-multiplayer";
@@ -353,6 +340,39 @@ function BoardSection() {
   const description = useRankForge((s) => s.description);
   const setMeta = useRankForge((s) => s.setMeta);
   const resetBoard = useRankForge((s) => s.resetBoard);
+  const newBoard = useRankForge((s) => s.newBoard);
+  const loadBoard = useRankForge((s) => s.loadBoard);
+
+  const snapshotBoard = (): RankForgeBoard => {
+    const s = useRankForge.getState();
+    return {
+      title: s.title,
+      description: s.description,
+      tiers: s.tiers,
+      items: s.items,
+      tierItems: s.tierItems,
+      unranked: s.unranked,
+    };
+  };
+
+  const handleNew = () => {
+    const prev = snapshotBoard();
+    newBoard();
+    toast.success("Started a fresh board", {
+      description: "Empty S–D tiers, ready to fill.",
+      action: { label: "Undo", onClick: () => loadBoard(prev) },
+      duration: 6000,
+    });
+  };
+
+  const handleStarter = () => {
+    const prev = snapshotBoard();
+    resetBoard();
+    toast.success("Loaded the starter board", {
+      action: { label: "Undo", onClick: () => loadBoard(prev) },
+      duration: 6000,
+    });
+  };
 
   return (
     <SectionShell label="board settings">
@@ -372,37 +392,18 @@ function BoardSection() {
         />
       </div>
 
-      <AlertDialog>
-        <AlertDialogTrigger asChild>
-          <Button
-            variant="ghost"
-            className="w-full text-muted-foreground hover:text-destructive"
-          >
-            <RotateCcw className="size-4" /> Reset to starter board
-          </Button>
-        </AlertDialogTrigger>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Reset the board?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This replaces your current tiers and items with the starter
-              board. Your current list will be lost — consider exporting first.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-white hover:bg-destructive/90"
-              onClick={() => {
-                resetBoard();
-                toast.success("Board reset to starter");
-              }}
-            >
-              Reset
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <div className="grid grid-cols-2 gap-2">
+        <Button onClick={handleNew} className="rf-btn-primary">
+          <FilePlus className="size-4" /> New board
+        </Button>
+        <Button
+          variant="outline"
+          onClick={handleStarter}
+          className="text-muted-foreground"
+        >
+          <RotateCcw className="size-4" /> Starter
+        </Button>
+      </div>
     </SectionShell>
   );
 }

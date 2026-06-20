@@ -16,16 +16,84 @@ export interface FocusInfo {
   userName: string;
   userColor: string;
   itemId: string;
-  ts: number;
 }
 
-export interface CursorInfo {
-  userId: string;
-  userName: string;
-  userColor: string;
-  x: number; // 0-100 viewport %
-  y: number;
-  ts: number;
+// ---------------------------------------------------------------------------
+// Focus external store
+// ---------------------------------------------------------------------------
+// Focus highlights are high-churn and item-scoped. Rather than storing them in
+// React context (which would re-render EVERY card on each focus change), we keep
+// them in a tiny external store and let each card subscribe to ONLY its own item
+// via useSyncExternalStore. With many users this avoids O(N) re-renders.
+
+type FocusListener = () => void;
+const focusStore = {
+  map: {} as Record<string, FocusInfo>,
+  listeners: new Set<FocusListener>(),
+  timers: {} as Record<string, ReturnType<typeof setTimeout>>,
+};
+
+function emitFocus() {
+  for (const l of focusStore.listeners) l();
+}
+
+function setItemFocus(info: FocusInfo) {
+  focusStore.map = { ...focusStore.map, [info.itemId]: info };
+  if (focusStore.timers[info.itemId]) clearTimeout(focusStore.timers[info.itemId]);
+  focusStore.timers[info.itemId] = setTimeout(() => {
+    removeItemFocus(info.itemId);
+  }, 4500);
+  emitFocus();
+}
+
+function removeItemFocus(itemId: string) {
+  if (!focusStore.map[itemId]) return;
+  const next = { ...focusStore.map };
+  delete next[itemId];
+  focusStore.map = next;
+  if (focusStore.timers[itemId]) {
+    clearTimeout(focusStore.timers[itemId]);
+    delete focusStore.timers[itemId];
+  }
+  emitFocus();
+}
+
+function removeUserFocus(userId: string) {
+  let changed = false;
+  const next = { ...focusStore.map };
+  for (const k of Object.keys(next)) {
+    if (next[k].userId === userId) {
+      delete next[k];
+      if (focusStore.timers[k]) {
+        clearTimeout(focusStore.timers[k]);
+        delete focusStore.timers[k];
+      }
+      changed = true;
+    }
+  }
+  if (changed) {
+    focusStore.map = next;
+    emitFocus();
+  }
+}
+
+function clearAllFocus() {
+  for (const k of Object.keys(focusStore.timers)) clearTimeout(focusStore.timers[k]);
+  focusStore.timers = {};
+  if (Object.keys(focusStore.map).length === 0) return;
+  focusStore.map = {};
+  emitFocus();
+}
+
+function subscribeFocus(cb: FocusListener) {
+  focusStore.listeners.add(cb);
+  return () => focusStore.listeners.delete(cb);
+}
+
+/** Subscribe to the focus highlight for a single item only. Cheap at scale. */
+export function useItemFocus(itemId: string): FocusInfo | undefined {
+  const getSnapshot = React.useCallback(() => focusStore.map[itemId], [itemId]);
+  return React.useSyncExternalStore(subscribeFocus, getSnapshot, () => undefined);
 }
 
 export interface MultiplayerState {
@@ -35,9 +103,6 @@ export interface MultiplayerState {
   peers: number;
   members: RoomUser[];
   hostId: string | null;
-  activity: ActivityEntry[];
-  focuses: Record<string, FocusInfo>; // itemId -> FocusInfo
-  cursors: Record<string, CursorInfo>; // userId -> CursorInfo
 }
 
 interface ServerRoomState {
@@ -107,7 +172,6 @@ interface MultiplayerContextValue extends MultiplayerState {
   logActivity: (action: ActivityAction, detail: string) => void;
   setFocus: (itemId: string) => void;
   clearFocus: () => void;
-  moveCursor: (x: number, y: number) => void;
 }
 
 const MultiplayerContext = React.createContext<MultiplayerContextValue>({
@@ -117,8 +181,6 @@ const MultiplayerContext = React.createContext<MultiplayerContextValue>({
   peers: 0,
   members: [],
   hostId: null,
-  activity: [],
-  focuses: {},
   hydrated: false,
   user: { id: "", name: "Guest", color: "#64748b" },
   updateUser: () => {},
@@ -131,8 +193,11 @@ const MultiplayerContext = React.createContext<MultiplayerContextValue>({
   logActivity: () => {},
   setFocus: () => {},
   clearFocus: () => {},
-  moveCursor: () => {},
 });
+
+// Activity lives in its own context so the (frequent) activity feed updates only
+// re-render the feed — not the entire board.
+const ActivityContext = React.createContext<ActivityEntry[]>([]);
 
 export function MultiplayerProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = React.useState<MultiplayerState>({
@@ -142,12 +207,8 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     peers: 0,
     members: [],
     hostId: null,
-    activity: [],
-    focuses: {},
-    cursors: {},
   });
-  const focusTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const cursorTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const [activity, setActivity] = React.useState<ActivityEntry[]>([]);
 
   const [user, setUser] = React.useState<LocalUser>({
     id: "",
@@ -164,6 +225,8 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
   const heartbeatRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const boardEmitTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingBoardRef = React.useRef<RankForgeBoard | null>(null);
+  // eventIds we've sent recently, so an echoed board:update is ignored cheaply.
+  const sentEventIdsRef = React.useRef<Set<string>>(new Set());
 
   // ---- Hydrate local user identity on mount ----
   React.useEffect(() => {
@@ -175,7 +238,6 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     setUser((prev) => {
       const next = { ...prev, ...patch };
       saveLocalUser(next);
-      // Re-send identity to server if connected.
       const sock = getSocket();
       if (sock && next.name && next.color) {
         sock.emit("identity", { name: next.name, color: next.color });
@@ -185,47 +247,56 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
   }, []);
 
   // ---- Apply a remote board snapshot (suppresses rebroadcast) ----
+  // Cheap: if the incoming board matches what we already have, do nothing — no
+  // store write, no re-render. This makes redundant board:update relays free.
   const applyRemoteBoard = React.useCallback((board: RankForgeBoard) => {
-    suppressBroadcastRef.current = true;
+    let normalized: RankForgeBoard;
     try {
-      const normalized = normalizeBoard(board);
-      useRankForge.getState().loadBoard(normalized);
-      lastSigRef.current = JSON.stringify(normalized);
+      normalized = normalizeBoard(board);
     } catch {
-      /* ignore malformed */
+      return; /* ignore malformed */
     }
+    const sig = JSON.stringify(normalized);
+    if (sig === lastSigRef.current) return; // identical to current state
+    suppressBroadcastRef.current = true;
+    lastSigRef.current = sig;
+    useRankForge.getState().loadBoard(normalized);
     setTimeout(() => {
       suppressBroadcastRef.current = false;
     }, 0);
   }, []);
 
-  // ---- Throttled board broadcast (debounce 120ms) ----
-  // Instead of emitting on every store change, we debounce so rapid drags
-  // don't flood the server. The last state within 120ms is sent.
-  const scheduleBoardEmit = React.useCallback(
-    (roomId: string) => {
-      pendingBoardRef.current = snapshotBoard(useRankForge.getState());
-      if (boardEmitTimerRef.current) return;
-      boardEmitTimerRef.current = setTimeout(() => {
-        boardEmitTimerRef.current = null;
-        const board = pendingBoardRef.current;
-        if (!board) return;
-        const sig = JSON.stringify(board);
-        if (sig === lastSigRef.current) return;
-        lastSigRef.current = sig;
-        const eventId = nextEventId();
-        socketRef.current?.emit("board:update", { roomId, board, eventId });
-      }, 120);
-    },
-    []
-  );
+  // ---- Throttled board broadcast (debounce 140ms, signature-deduped) ----
+  const scheduleBoardEmit = React.useCallback((roomId: string) => {
+    pendingBoardRef.current = snapshotBoard(useRankForge.getState());
+    if (boardEmitTimerRef.current) return;
+    boardEmitTimerRef.current = setTimeout(() => {
+      boardEmitTimerRef.current = null;
+      const board = pendingBoardRef.current;
+      pendingBoardRef.current = null;
+      if (!board) return;
+      const sig = JSON.stringify(board);
+      if (sig === lastSigRef.current) return; // nothing actually changed
+      lastSigRef.current = sig;
+      const eventId = nextEventId();
+      const sent = sentEventIdsRef.current;
+      sent.add(eventId);
+      if (sent.size > 32) {
+        // keep the set bounded
+        const first = sent.values().next().value;
+        if (first) sent.delete(first);
+      }
+      socketRef.current?.emit("board:update", { roomId, board, eventId });
+    }, 140);
+  }, []);
 
   // ---- Subscribe to local store changes and broadcast (when connected) ----
   React.useEffect(() => {
     if (state.status !== "connected" || !state.roomId) return;
-    const unsub = useRankForge.subscribe((s) => {
+    const roomId = state.roomId;
+    const unsub = useRankForge.subscribe(() => {
       if (suppressBroadcastRef.current) return;
-      scheduleBoardEmit(state.roomId!);
+      scheduleBoardEmit(roomId);
     });
     return unsub;
   }, [state.status, state.roomId, scheduleBoardEmit]);
@@ -250,29 +321,19 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     const sock = ensureSocket();
     socketRef.current = sock;
 
-    // Send identity as soon as we connect (or reconnect).
     const u = getLocalUser();
     sock.emit("identity", { name: u.name, color: u.color });
 
-    // Track connection state for UI feedback.
     sock.off("disconnect").on("disconnect", () => {
-      setState((s) =>
-        s.status === "connected"
-          ? { ...s, status: "connecting" }
-          : s
-      );
+      setState((s) => (s.status === "connected" ? { ...s, status: "connecting" } : s));
     });
 
-    // Reconnect handler — re-emit identity, then rejoin if we had a room.
     sock.io.off("reconnect").on("reconnect", () => {
       const u2 = getLocalUser();
       sock.emit("identity", { name: u2.name, color: u2.color });
       const currentRoom = getRoomFromUrl();
       if (currentRoom) {
-        // Re-join without sending our board (server has the authoritative one).
-        // Listeners are already attached from the original joinRoom call.
         sock.emit("room:join", { roomId: currentRoom });
-        // Request fresh vote state in case a vote is active.
         sock.emit("vote:sync-request", { roomId: currentRoom });
       }
     });
@@ -317,21 +378,24 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       const sock = connect();
       setState((s) => ({ ...s, status: "connecting" }));
 
-      // Wire up all listeners (idempotent — .off().on() pattern).
       sock.off("room:state").on("room:state", (payload: ServerRoomState) => {
         handleState(payload, asHost);
       });
       sock.off("board:sync").on("board:sync", (payload: { board: RankForgeBoard | null }) => {
         if (payload.board) applyRemoteBoard(payload.board);
       });
-      sock.off("board:update").on("board:update", (payload: { board: RankForgeBoard }) => {
-        applyRemoteBoard(payload.board);
-      });
+      sock
+        .off("board:update")
+        .on("board:update", (payload: { board: RankForgeBoard; eventId?: string }) => {
+          // Skip our own echo (defensive — server doesn't self-echo).
+          if (payload.eventId && sentEventIdsRef.current.has(payload.eventId)) return;
+          applyRemoteBoard(payload.board);
+        });
       sock.off("presence:update").on(
         "presence:update",
         (payload: { members: RoomUser[]; host: string | null; peers?: number }) => {
-          const sock = getSocket();
-          const myId = sock?.id ?? null;
+          const s2 = getSocket();
+          const myId = s2?.id ?? null;
           setState((s) => ({
             ...s,
             members: payload.members ?? [],
@@ -342,69 +406,23 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
         }
       );
       sock.off("activity:sync").on("activity:sync", (payload: { entries: ActivityEntry[] }) => {
-        setState((s) => ({ ...s, activity: payload.entries ?? [] }));
+        setActivity(payload.entries ?? []);
       });
       sock.off("activity:new").on("activity:new", (payload: { entry: ActivityEntry }) => {
-        setState((s) => {
-          const next = [...s.activity, payload.entry];
+        setActivity((prev) => {
+          const next = [...prev, payload.entry];
           if (next.length > 40) next.splice(0, next.length - 40);
-          return { ...s, activity: next };
+          return next;
         });
       });
-      // Focus relay — other users hovering/dragging items.
+      // Focus relay — routed to the external focus store (not React state).
       sock.off("focus:set").on("focus:set", (payload: FocusInfo) => {
         if (!payload?.itemId || !payload?.userId) return;
-        setState((s) => ({
-          ...s,
-          focuses: { ...s.focuses, [payload.itemId]: payload },
-        }));
-        const key = payload.itemId;
-        if (focusTimersRef.current[key]) clearTimeout(focusTimersRef.current[key]);
-        focusTimersRef.current[key] = setTimeout(() => {
-          setState((s) => {
-            const next = { ...s.focuses };
-            delete next[key];
-            return { ...s, focuses: next };
-          });
-          delete focusTimersRef.current[key];
-        }, 4000);
+        setItemFocus(payload);
       });
       sock.off("focus:clear").on("focus:clear", (payload: { userId: string }) => {
         if (!payload?.userId) return;
-        setState((s) => {
-          const next = { ...s.focuses };
-          for (const k of Object.keys(next)) {
-            if (next[k].userId === payload.userId) delete next[k];
-          }
-          return { ...s, focuses: next };
-        });
-      });
-      // Cursor relay — live mouse positions.
-      sock.off("cursor:move").on("cursor:move", (payload: CursorInfo) => {
-        if (!payload?.userId) return;
-        setState((s) => ({
-          ...s,
-          cursors: { ...s.cursors, [payload.userId]: payload },
-        }));
-        // Auto-expire after 5s of no movement.
-        const key = payload.userId;
-        if (cursorTimersRef.current[key]) clearTimeout(cursorTimersRef.current[key]);
-        cursorTimersRef.current[key] = setTimeout(() => {
-          setState((s) => {
-            const next = { ...s.cursors };
-            delete next[key];
-            return { ...s, cursors: next };
-          });
-          delete cursorTimersRef.current[key];
-        }, 5000);
-      });
-      sock.off("cursor:clear").on("cursor:clear", (payload: { userId: string }) => {
-        if (!payload?.userId) return;
-        setState((s) => {
-          const next = { ...s.cursors };
-          delete next[payload.userId];
-          return { ...s, cursors: next };
-        });
+        removeUserFocus(payload.userId);
       });
 
       const board = asHost ? snapshotBoard(useRankForge.getState()) : undefined;
@@ -428,6 +446,8 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     setRoomInUrl(null);
     lastSigRef.current = "";
     lastPresenceRef.current = "online";
+    clearAllFocus();
+    setActivity([]);
     setState({
       status: "disconnected",
       roomId: null,
@@ -435,7 +455,6 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       peers: 0,
       members: [],
       hostId: null,
-      activity: [],
     });
     toast("Left the room");
   }, []);
@@ -482,31 +501,13 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     if (sock && roomId) sock.emit("focus:clear", { roomId });
   }, []);
 
-  // ---- Cursor broadcast (rAF-throttled) ----
-  const cursorRafRef = React.useRef<number | null>(null);
-  const cursorPendingRef = React.useRef<{ x: number; y: number } | null>(null);
-  const sendCursor = React.useCallback(() => {
-    cursorRafRef.current = null;
-    const pending = cursorPendingRef.current;
-    if (!pending) return;
-    cursorPendingRef.current = null;
-    const sock = getSocket();
-    const roomId = getRoomFromUrl();
-    if (sock && roomId) sock.emit("cursor:move", { roomId, x: pending.x, y: pending.y });
-  }, []);
-  const moveCursor = React.useCallback((x: number, y: number) => {
-    cursorPendingRef.current = { x, y };
-    if (cursorRafRef.current === null) {
-      cursorRafRef.current = requestAnimationFrame(sendCursor);
-    }
-  }, [sendCursor]);
-
   // ---- Cleanup on unmount ----
   React.useEffect(() => {
     return () => {
       const sock = getSocket();
       sock?.removeAllListeners();
       if (boardEmitTimerRef.current) clearTimeout(boardEmitTimerRef.current);
+      clearAllFocus();
     };
   }, []);
 
@@ -554,14 +555,13 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       logActivity,
       setFocus,
       clearFocus,
-      moveCursor,
     }),
-    [state, hydrated, user, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity, setFocus, clearFocus, moveCursor]
+    [state, hydrated, user, updateUser, createRoom, joinRoom, leaveRoom, copyShareLink, shareUrl, setPresence, logActivity, setFocus, clearFocus]
   );
 
   return (
     <MultiplayerContext.Provider value={value}>
-      {children}
+      <ActivityContext.Provider value={activity}>{children}</ActivityContext.Provider>
     </MultiplayerContext.Provider>
   );
 }
@@ -569,4 +569,9 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
 /** Consume the shared multiplayer state. Must be used inside MultiplayerProvider. */
 export function useMultiplayer() {
   return React.useContext(MultiplayerContext);
+}
+
+/** Consume just the activity log (isolated so the feed re-renders alone). */
+export function useActivityLog() {
+  return React.useContext(ActivityContext);
 }

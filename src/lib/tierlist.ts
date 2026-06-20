@@ -168,6 +168,26 @@ export function createDefaultBoard(): RankForgeBoard {
   };
 }
 
+/** Build a fresh, empty board: the standard S–D tiers, no items. */
+export function createEmptyBoard(): RankForgeBoard {
+  const tiers: Tier[] = ["S", "A", "B", "C", "D"].map((name, i) => ({
+    id: createTierId(),
+    name,
+    color: DEFAULT_TIER_COLORS[name] ?? "#64748b",
+    points: DEFAULT_TIER_POINTS[name] ?? Math.max(0, 5 - i),
+  }));
+  const tierItems: Record<string, string[]> = {};
+  for (const t of tiers) tierItems[t.id] = [];
+  return {
+    title: "My Tier List",
+    description: "",
+    tiers,
+    items: {},
+    tierItems,
+    unranked: [],
+  };
+}
+
 /** Light validation + normalization for imported JSON. */
 export function normalizeBoard(input: unknown): RankForgeBoard {
   if (!input || typeof input !== "object") {

@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useRankForge } from "@/lib/store";
 import { UNRANKED_ID, type TierItem } from "@/lib/tierlist";
-import { useMultiplayer } from "@/hooks/use-multiplayer";
+import { useMultiplayer, useItemFocus } from "@/hooks/use-multiplayer";
 import { useVotingMode } from "./voting-context";
 import { VoteButton } from "./voting-overlay";
 import { toast } from "sonner";
@@ -36,8 +36,10 @@ interface CardViewProps {
   assignedAvatarName?: string;
 }
 
-/** Pure presentational card — used in the board and the drag overlay. */
-function ItemCardView({
+/** Pure presentational card — used in the board and the drag overlay.
+ * Memoized so presence/activity churn elsewhere doesn't re-diff every card;
+ * it only re-renders when its own item / focus / assignment props change. */
+const ItemCardView = React.memo(function ItemCardView({
   item,
   className,
   dragging,
@@ -139,7 +141,7 @@ function ItemCardView({
       ) : null}
     </div>
   );
-}
+});
 
 interface SortableItemCardProps {
   item: TierItem;
@@ -158,13 +160,13 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
 
   const deleteItem = useRankForge((s) => s.deleteItem);
   const restoreItem = useRankForge((s) => s.restoreItem);
-  const moveItem = useRankForge((s) => s.moveItem);
   const findContainerOf = useRankForge((s) => s.findContainerOf);
   const indexOfItem = useRankForge((s) => s.indexOfItem);
   const updateItemLabel = useRankForge((s) => s.updateItemLabel);
   const assignItem = useRankForge((s) => s.assignItem);
   const { votingMode } = useVotingMode();
-  const { focuses, setFocus, clearFocus, status, members } = useMultiplayer();
+  const { setFocus, clearFocus, status, members, logActivity } = useMultiplayer();
+  const focus = useItemFocus(item.id);
   const assignedMember = item.assignedUserId
     ? members.find((m) => m.id === item.assignedUserId)
     : undefined;
@@ -183,41 +185,27 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
 
   const stop = (e: React.PointerEvent) => e.stopPropagation();
 
-  const focus = focuses[item.id];
   const focusColor = focus?.userColor;
   const focusName = focus?.userName;
 
-  // Delete logic: items in tiers → move to Unranked (soft). Items in Unranked → permanent delete. Both with Undo.
+  // Full delete: the item is removed entirely from wherever it lives (a tier
+  // or the unranked pool). Undo restores the exact item (same id + data) to its
+  // original container and position.
   const handleRemove = () => {
-    const currentContainer = findContainerOf(item.id);
-    if (currentContainer && currentContainer !== UNRANKED_ID) {
-      // Item is in a tier → move to Unranked with undo.
-      const oldIndex = indexOfItem(currentContainer, item.id);
-      moveItem(item.id, currentContainer, UNRANKED_ID, -1);
-      toast(`Moved "${item.label}" to Unranked`, {
-        action: {
-          label: "Undo",
-          onClick: () => {
-            moveItem(item.id, UNRANKED_ID, currentContainer, oldIndex);
-          },
+    const currentContainer = findContainerOf(item.id) ?? UNRANKED_ID;
+    const oldIndex = indexOfItem(currentContainer, item.id);
+    const snapshot = { ...item };
+    deleteItem(item.id);
+    if (status === "connected") logActivity("deleted", item.label);
+    toast(`Deleted "${item.label}"`, {
+      action: {
+        label: "Undo",
+        onClick: () => {
+          restoreItem(snapshot, currentContainer, oldIndex < 0 ? 0 : oldIndex);
         },
-        duration: 5000,
-      });
-    } else {
-      // Item is in Unranked → permanent delete with undo that restores full data.
-      const oldIndex = indexOfItem(UNRANKED_ID, item.id);
-      const snapshot = { ...item };
-      deleteItem(item.id);
-      toast(`Deleted "${item.label}"`, {
-        action: {
-          label: "Undo",
-          onClick: () => {
-            restoreItem(snapshot, UNRANKED_ID, oldIndex);
-          },
-        },
-        duration: 5000,
-      });
-    }
+      },
+      duration: 5000,
+    });
   };
 
   return (

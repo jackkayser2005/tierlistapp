@@ -118,6 +118,9 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    scroll-behavior: smooth;
+  }
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "ss01", "cv01", "cv03", "cv11";
@@ -130,30 +133,62 @@
   h1, h2, h3 {
     letter-spacing: -0.025em;
   }
+  /* Branded selection */
+  ::selection {
+    background: color-mix(in oklch, oklch(0.62 0.18 290) 38%, transparent);
+    color: var(--foreground);
+  }
+  /* Crisp, on-brand keyboard focus ring everywhere */
+  :focus-visible {
+    outline: 2px solid color-mix(in oklch, oklch(0.66 0.16 285) 70%, transparent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
 }
 
 /* ============================================================
-   RankForge design system — sleek & production-ready
+   RankForge design system — sleek, vivid & production-ready
    ============================================================ */
 
-/* Ambient background — very subtle, single soft glow */
+/* Ambient background — layered glows + faint grid for depth */
 .rf-app-bg {
+  position: relative;
   background-color: var(--background);
   background-image:
-    radial-gradient(50rem 50rem at 90% -10%, color-mix(in oklch, oklch(0.55 0.12 265) 10%, transparent), transparent 60%);
+    radial-gradient(48rem 48rem at 88% -12%, color-mix(in oklch, oklch(0.58 0.16 285) 20%, transparent), transparent 60%),
+    radial-gradient(42rem 42rem at -8% 6%, color-mix(in oklch, oklch(0.6 0.14 232) 15%, transparent), transparent 58%),
+    radial-gradient(64rem 38rem at 50% 122%, color-mix(in oklch, oklch(0.6 0.16 320) 11%, transparent), transparent 60%);
   background-attachment: fixed;
 }
+/* Faint grid texture layered over the glows for a designed, tactile feel. */
+.rf-app-bg::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, color-mix(in oklch, white 3%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklch, white 3%, transparent) 1px, transparent 1px);
+  background-size: 3rem 3rem;
+  mask-image: radial-gradient(120rem 80rem at 50% -10%, black, transparent 75%);
+  -webkit-mask-image: radial-gradient(120rem 80rem at 50% -10%, black, transparent 75%);
+}
+.rf-app-bg > * {
+  position: relative;
+  z-index: 1;
+}
 
-/* Panels — clean, solid, subtle border. Less glass, more structure. */
+/* Panels — clean, solid, subtle border with depth. */
 .rf-panel {
-  background: color-mix(in oklch, var(--card) 90%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid color-mix(in oklch, white 6%, transparent);
+  background: color-mix(in oklch, var(--card) 92%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid color-mix(in oklch, white 7%, transparent);
   box-shadow:
-    0 1px 0 0 color-mix(in oklch, white 4%, transparent) inset,
+    0 1px 0 0 color-mix(in oklch, white 5%, transparent) inset,
     0 1px 3px 0 rgb(0 0 0 / 0.4),
-    0 8px 24px -12px rgb(0 0 0 / 0.6);
+    0 12px 32px -16px rgb(0 0 0 / 0.7);
 }
 .rf-panel-soft {
   background: color-mix(in oklch, var(--card) 70%, transparent);
@@ -168,15 +203,20 @@
   border: 1px solid color-mix(in oklch, white 4%, transparent);
 }
 
-/* Brand — refined indigo, subtle */
+/* Brand — vivid indigo → violet */
 .rf-brand {
-  background-image: linear-gradient(135deg, oklch(0.62 0.14 268), oklch(0.58 0.15 285));
+  background-image: linear-gradient(135deg, oklch(0.64 0.17 268), oklch(0.6 0.19 300));
 }
 .rf-brand-text {
-  background-image: linear-gradient(135deg, oklch(0.72 0.12 268), oklch(0.66 0.14 290));
+  background-image: linear-gradient(110deg, oklch(0.8 0.13 262), oklch(0.72 0.18 300), oklch(0.82 0.12 250));
+  background-size: 200% auto;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+  animation: rf-brand-shimmer 7s linear infinite;
+}
+@keyframes rf-brand-shimmer {
+  to { background-position: 200% center; }
 }
 
 /* Accent — emerald for primary CTAs (fresh, modern, high-contrast on dark) */
@@ -206,16 +246,16 @@
 
 /* Primary button — sleek, subtle lift */
 .rf-btn-primary {
-  background-image: linear-gradient(135deg, oklch(0.64 0.14 268), oklch(0.58 0.15 288));
+  background-image: linear-gradient(135deg, oklch(0.64 0.17 268), oklch(0.59 0.19 296));
   color: #fff;
   font-weight: 600;
-  box-shadow: 0 1px 0 0 rgba(255,255,255,0.15) inset, 0 2px 8px -2px color-mix(in oklch, oklch(0.6 0.14 280) 40%, transparent);
+  box-shadow: 0 1px 0 0 rgba(255,255,255,0.18) inset, 0 2px 10px -2px color-mix(in oklch, oklch(0.6 0.17 285) 50%, transparent);
   transition: transform 0.1s ease, filter 0.1s ease, box-shadow 0.1s ease;
 }
 .rf-btn-primary:hover {
   transform: translateY(-1px);
   filter: brightness(1.1);
-  box-shadow: 0 1px 0 0 rgba(255,255,255,0.2) inset, 0 6px 16px -4px color-mix(in oklch, oklch(0.6 0.14 280) 50%, transparent);
+  box-shadow: 0 1px 0 0 rgba(255,255,255,0.24) inset, 0 8px 20px -5px color-mix(in oklch, oklch(0.6 0.17 285) 60%, transparent);
 }
 .rf-btn-primary:active {
   transform: translateY(0) scale(0.98);

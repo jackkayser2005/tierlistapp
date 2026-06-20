@@ -1,19 +1,36 @@
 "use client";
 
 import * as React from "react";
-import { Check, X, Trophy, Users, Vote as VoteIcon, Sparkles, Zap } from "lucide-react";
+import {
+  Check,
+  X,
+  Trophy,
+  Vote as VoteIcon,
+  Sparkles,
+  Zap,
+  ArrowRight,
+  Hourglass,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useRankForge } from "@/lib/store";
 import { readableTextOn, type TierItem } from "@/lib/tierlist";
 import { useVoting } from "@/hooks/use-voting";
+import { useMultiplayer } from "@/hooks/use-multiplayer";
 import { toast } from "sonner";
+
+function nameInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
 function VoteCard({ item }: { item: TierItem }) {
   const [imgError, setImgError] = React.useState(false);
   const showImage = item.type === "image" && item.imageUrl && !imgError;
   return (
-    <div className="rf-pop-in relative size-40 overflow-hidden rounded-2xl border border-white/15 shadow-2xl sm:size-48">
+    <div className="rf-pop-in relative size-36 overflow-hidden rounded-2xl border border-white/15 shadow-2xl sm:size-44">
       {showImage ? (
         <>
           <img
@@ -42,10 +59,49 @@ function VoteCard({ item }: { item: TierItem }) {
   );
 }
 
+/** A compact row of avatars showing who has / hasn't voted yet. */
+function VoterStrip({ voters }: { voters: string[] }) {
+  const { members } = useMultiplayer();
+  if (members.length === 0) return null;
+  const voted = new Set(voters);
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-1.5">
+      {members.map((m) => {
+        const hasVoted = voted.has(m.id);
+        return (
+          <div
+            key={m.id}
+            title={hasVoted ? `${m.name} voted` : `${m.name} hasn't voted yet`}
+            className={cn(
+              "relative grid size-7 place-items-center rounded-full text-[10px] font-bold transition-all",
+              hasVoted
+                ? "ring-2 ring-emerald-400/70"
+                : "opacity-40 grayscale rf-live-dot"
+            )}
+            style={{
+              backgroundColor: m.color,
+              color: readableTextOn(m.color),
+            }}
+          >
+            {nameInitials(m.name)}
+            {hasVoted ? (
+              <span className="absolute -bottom-1 -right-1 grid size-3.5 place-items-center rounded-full bg-emerald-400 text-black ring-2 ring-background">
+                <Check className="size-2" />
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Winner celebration shown briefly after a vote ends. */
 function CelebrationOverlay() {
-  const { celebration, dismissCelebration } = useVoting();
+  const { celebration, dismissCelebration, canControl, startNextVote } =
+    useVoting();
   const tiers = useRankForge((s) => s.tiers);
+  const unrankedCount = useRankForge((s) => s.unranked.length);
   if (!celebration) return null;
 
   const winnerTier = tiers.find((t) => t.id === celebration.winnerTierId);
@@ -60,13 +116,13 @@ function CelebrationOverlay() {
     >
       <div className="absolute inset-0 bg-black/80 backdrop-blur-lg" />
       <div
-        className="rf-pop-in relative w-full max-w-md overflow-hidden rounded-3xl p-8 text-center"
+        className="rf-pop-in relative w-full max-w-md overflow-hidden rounded-3xl p-8 text-center shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
         style={{
           background: `linear-gradient(160deg, ${winnerColor}, color-mix(in srgb, ${winnerColor} 50%, #000))`,
           color: textColor,
         }}
       >
-        {/* sparkle decorations */}
         <div className="pointer-events-none absolute inset-0 opacity-30">
           {Array.from({ length: 8 }).map((_, i) => (
             <Sparkles
@@ -86,7 +142,7 @@ function CelebrationOverlay() {
             <Trophy className="size-8" style={{ color: textColor }} />
           </div>
           <p className="text-xs font-bold uppercase tracking-widest opacity-80">
-            Winner
+            Placed in
           </p>
           <p className="mt-1 text-5xl font-black tracking-tight">
             {celebration.winnerTierName}
@@ -98,7 +154,6 @@ function CelebrationOverlay() {
             {totalVotes} vote{totalVotes === 1 ? "" : "s"} cast
           </p>
 
-          {/* mini tally bars */}
           <div className="mt-5 space-y-1.5">
             {Object.entries(celebration.tally)
               .sort((a, b) => b[1] - a[1])
@@ -108,7 +163,7 @@ function CelebrationOverlay() {
                 const isWinner = tierId === celebration.winnerTierId;
                 return (
                   <div key={tierId} className="flex items-center gap-2">
-                    <span className="w-6 text-xs font-bold opacity-80">
+                    <span className="w-8 truncate text-left text-xs font-bold opacity-80">
                       {t?.name}
                     </span>
                     <div className="h-2 flex-1 overflow-hidden rounded-full bg-black/20">
@@ -118,17 +173,39 @@ function CelebrationOverlay() {
                       />
                     </div>
                     <span className="w-4 text-xs font-bold opacity-80">{count}</span>
-                    {isWinner ? (
-                      <Trophy className="size-3 opacity-90" />
-                    ) : null}
+                    {isWinner ? <Trophy className="size-3 opacity-90" /> : null}
                   </div>
                 );
               })}
           </div>
 
-          <p className="mt-5 text-[11px] opacity-60">
-            Tap anywhere to dismiss
-          </p>
+          {canControl ? (
+            <div className="mt-6 flex items-center justify-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="bg-black/15 text-current hover:bg-black/25"
+                style={{ color: textColor }}
+                onClick={dismissCelebration}
+              >
+                Done
+              </Button>
+              <Button
+                size="sm"
+                className="bg-white/90 font-bold text-black hover:bg-white"
+                disabled={unrankedCount === 0}
+                onClick={() => {
+                  dismissCelebration();
+                  startNextVote();
+                }}
+              >
+                Vote next
+                <ArrowRight className="size-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <p className="mt-6 text-[11px] opacity-60">Tap anywhere to dismiss</p>
+          )}
         </div>
       </div>
     </div>
@@ -143,6 +220,8 @@ export function VotingOverlay() {
   if (!vote.active || !vote.item) return <CelebrationOverlay />;
 
   const totalVotes = vote.voterCount;
+  const everyoneVoted =
+    vote.totalPeers > 0 && totalVotes >= vote.totalPeers;
   const leadingTierId = Object.entries(vote.tally).sort(
     (a, b) => b[1] - a[1]
   )[0]?.[0];
@@ -151,29 +230,27 @@ export function VotingOverlay() {
   return (
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        {/* backdrop */}
         <div className="absolute inset-0 bg-black/70 backdrop-blur-md" />
 
-        {/* card */}
-        <div className="rf-pop-in rf-panel relative w-full max-w-lg overflow-hidden rounded-3xl p-6 sm:p-8">
+        <div className="rf-pop-in rf-panel relative w-full max-w-lg overflow-hidden rounded-3xl p-6 sm:p-7">
           {/* header */}
-          <div className="mb-5 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="rf-brand rf-glow grid size-8 place-items-center rounded-lg">
-                <VoteIcon className="size-4 text-white" />
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="rf-brand rf-glow grid size-9 place-items-center rounded-xl">
+                <VoteIcon className="size-4.5 text-white" />
               </span>
               <div>
-                <p className="text-sm font-bold leading-tight">
-                  Vote now!
-                </p>
-                <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <Users className="size-3" />
-                  {totalVotes} of {vote.totalPeers} voted
+                <p className="text-sm font-bold leading-tight">Group vote</p>
+                <p className="text-xs text-muted-foreground">
+                  <span className="font-semibold text-foreground/80">
+                    {totalVotes}
+                  </span>{" "}
+                  of {vote.totalPeers} voted
                 </p>
               </div>
             </div>
             {canControl ? (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -182,13 +259,18 @@ export function VotingOverlay() {
                 >
                   <X className="size-4" /> Cancel
                 </Button>
-                <Button size="sm" className="rf-btn-accent" onClick={endVote}>
+                <Button
+                  size="sm"
+                  className={cn("rf-btn-accent", everyoneVoted && "rf-glow")}
+                  onClick={endVote}
+                >
                   <Zap className="size-4" /> End &amp; place
                 </Button>
               </div>
             ) : (
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] text-muted-foreground">
-                Cast your vote!
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-medium text-muted-foreground">
+                <Hourglass className="size-3" />
+                Host closes it
               </span>
             )}
           </div>
@@ -196,13 +278,18 @@ export function VotingOverlay() {
           {/* the item being voted on */}
           <div className="flex flex-col items-center gap-3">
             <VoteCard item={vote.item} />
-            <p className="text-center text-xs text-muted-foreground">
-              Where does this belong? Pick a tier.
+            <p className="text-center text-sm font-semibold">
+              Where does this belong?
             </p>
           </div>
 
+          {/* voter strip — who has / hasn't voted */}
+          <div className="mt-4">
+            <VoterStrip voters={vote.voters} />
+          </div>
+
           {/* tier vote buttons with animated bars */}
-          <div className="mt-6 grid grid-cols-2 gap-2.5 sm:grid-cols-5">
+          <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-5">
             {tiers.map((tier) => {
               const count = vote.tally[tier.id] ?? 0;
               const isMyVote = myVote === tier.id;
@@ -218,20 +305,19 @@ export function VotingOverlay() {
                     "group relative flex h-24 flex-col items-center justify-end gap-1 overflow-hidden rounded-xl border p-2.5 transition-all",
                     "active:scale-95",
                     isMyVote
-                      ? "border-white/50 ring-2 ring-white/40"
-                      : "border-white/10 hover:border-white/30 hover:-translate-y-0.5"
+                      ? "border-white/60 ring-2 ring-white/50"
+                      : "border-white/10 hover:border-white/40 hover:-translate-y-0.5"
                   )}
                   style={{
                     background: `linear-gradient(160deg, ${tier.color}, color-mix(in srgb, ${tier.color} 50%, #000))`,
                     color: textColor,
                   }}
                 >
-                  {/* animated vote bar fill from bottom */}
                   <div
                     className="absolute inset-x-0 bottom-0 bg-white/15 transition-all duration-500 ease-out"
                     style={{ height: `${barHeight}%` }}
                   />
-                  <span className="relative text-xl font-black uppercase tracking-tight">
+                  <span className="relative max-w-full truncate text-lg font-black uppercase leading-none tracking-tight">
                     {tier.name}
                   </span>
                   <span
@@ -271,10 +357,17 @@ export function VotingOverlay() {
                 }}
               />
             </div>
-            <p className="mt-2 text-center text-[11px] text-muted-foreground">
-              {myVote
-                ? "✓ You voted — waiting on the others."
-                : "Pick a tier to cast your vote."}
+            <p
+              className={cn(
+                "mt-2 text-center text-[11px]",
+                myVote ? "text-emerald-300" : "text-muted-foreground"
+              )}
+            >
+              {myVote ? (
+                <>Locked in — tap another tier to change your pick.</>
+              ) : (
+                <>Pick a tier to cast your vote.</>
+              )}
             </p>
           </div>
         </div>

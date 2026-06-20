@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import {
   createDefaultBoard,
+  createEmptyBoard,
   createTierId,
   normalizeBoard,
   UNRANKED_ID,
@@ -39,6 +40,7 @@ interface RankForgeState extends RankForgeBoard {
   // ---- board actions ----
   setMeta: (patch: Partial<Pick<RankForgeBoard, "title" | "description">>) => void;
   resetBoard: () => void;
+  newBoard: () => void;
   loadBoard: (board: RankForgeBoard) => void;
 
   // ---- selectors / helpers ----
@@ -196,7 +198,9 @@ export const useRankForge = create<RankForgeState>()(
       addTier: () =>
         set((state) => {
           const id = createTierId();
-          const newTier: Tier = { id, name: "New", color: "#8b5cf6" };
+          // New tiers sit at the bottom — award them 1 point so leaderboard
+          // scoring stays monotonic (top tiers are worth more).
+          const newTier: Tier = { id, name: "New", color: "#8b5cf6", points: 1 };
           return {
             tiers: [...state.tiers, newTier],
             tierItems: { ...state.tierItems, [id]: [] },
@@ -243,6 +247,11 @@ export const useRankForge = create<RankForgeState>()(
       resetBoard: () =>
         set(() => ({
           ...createDefaultBoard(),
+        })),
+
+      newBoard: () =>
+        set(() => ({
+          ...createEmptyBoard(),
         })),
 
       loadBoard: (board) =>
