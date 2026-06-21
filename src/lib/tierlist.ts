@@ -1,8 +1,5 @@
 // Core domain types and default data for RankForge.
 
-import type { PeerTierLetter } from "./peer-rating";
-import { hiddenAverageToTier, isPeerTierLetter } from "./peer-rating";
-
 export type ItemType = "text" | "image";
 
 export interface TierItem {
@@ -27,16 +24,19 @@ export interface Tier {
 /** Special container id used for the unranked pool. */
 export const UNRANKED_ID = "__unranked__";
 
-/** Cumulative peer-rating result for an item across finished rounds. */
+/** Group-vote result for an item — updated each time a vote places it on the board. */
 export interface BankedScore {
   label: string;
   imageUrl?: string;
   linkedPlayerName?: string;
   linkedPlayerColor?: string;
-  /** Display tier on the leaderboard — never expose numeric points. */
-  tier: PeerTierLetter;
-  /** Internal running average of hidden vote weights — never shown in UI. */
-  hiddenAverage: number;
+  /** Tier row the group vote placed this card in. */
+  tierId: string;
+  tierName: string;
+  tierColor: string;
+  /** Votes the winning tier received in the last vote on this item. */
+  lastVoteCount: number;
+  /** How many times this item has been through a group vote. */
   rounds: number;
 }
 
@@ -49,7 +49,7 @@ export interface RankForgeBoard {
   tierItems: Record<string, string[]>;
   /** ordered item ids in the unranked pool. */
   unranked: string[];
-  /** itemId -> cumulative peer-rating tier across finished rounds. */
+  /** itemId -> group-vote placement history. */
   bankedScores: Record<string, BankedScore>;
 }
 
@@ -301,9 +301,12 @@ export function normalizeBoard(input: unknown): RankForgeBoard {
     for (const [id, raw] of Object.entries(bankedSrc as Record<string, unknown>)) {
       if (!raw || typeof raw !== "object") continue;
       const b = raw as Record<string, unknown>;
-      const name = typeof b.name === "string" ? b.name : "Item";
       const label =
-        typeof b.label === "string" ? b.label : name;
+        typeof b.label === "string"
+          ? b.label
+          : typeof b.name === "string"
+            ? b.name
+            : "Item";
       const imageUrl =
         typeof b.imageUrl === "string" ? b.imageUrl : undefined;
       const linkedPlayerName =
@@ -318,30 +321,49 @@ export function normalizeBoard(input: unknown): RankForgeBoard {
           : typeof b.color === "string"
             ? b.color
             : undefined;
-      const legacyScore =
-        typeof b.score === "number" && isFinite(b.score) ? b.score : null;
-      const hiddenAverage =
-        typeof b.hiddenAverage === "number" && isFinite(b.hiddenAverage)
-          ? b.hiddenAverage
-          : legacyScore !== null
-            ? Math.min(4.35, Math.max(0, legacyScore / 5))
-            : 0;
       const rounds =
         typeof b.rounds === "number" && isFinite(b.rounds) && b.rounds > 0
           ? b.rounds
           : 1;
-      const tierRaw = typeof b.tier === "string" ? b.tier : null;
-      const tier: PeerTierLetter =
-        tierRaw && isPeerTierLetter(tierRaw)
-          ? tierRaw
-          : hiddenAverageToTier(hiddenAverage);
+
+      // New vote-based shape
+      if (
+        typeof b.tierId === "string" &&
+        typeof b.tierName === "string" &&
+        typeof b.tierColor === "string"
+      ) {
+        bankedScores[id] = {
+          label,
+          ...(imageUrl ? { imageUrl } : {}),
+          ...(linkedPlayerName ? { linkedPlayerName } : {}),
+          ...(linkedPlayerColor ? { linkedPlayerColor } : {}),
+          tierId: b.tierId,
+          tierName: b.tierName,
+          tierColor: b.tierColor,
+          lastVoteCount:
+            typeof b.lastVoteCount === "number" && isFinite(b.lastVoteCount)
+              ? b.lastVoteCount
+              : 0,
+          rounds,
+        };
+        continue;
+      }
+
+      // Legacy peer-rating → map letter tier to first matching board row
+      const tierRaw = typeof b.tier === "string" ? b.tier.trim().toUpperCase() : "";
+      const matched =
+        tiers.find((t) => t.name.trim().toUpperCase() === tierRaw) ??
+        tiers[0];
+      if (!matched) continue;
       bankedScores[id] = {
         label,
         ...(imageUrl ? { imageUrl } : {}),
         ...(linkedPlayerName ? { linkedPlayerName } : {}),
         ...(linkedPlayerColor ? { linkedPlayerColor } : {}),
-        tier,
-        hiddenAverage,
+        tierId: matched.id,
+        tierName: matched.name,
+        tierColor: matched.color,
+        lastVoteCount: 0,
         rounds,
       };
     }

@@ -4,6 +4,7 @@ import * as React from "react";
 import { useRankForge } from "@/lib/store";
 import { getSocket } from "@/lib/socket";
 import { useMultiplayer } from "./use-multiplayer";
+import { memberKey } from "@/lib/presence";
 import type { TierItem } from "@/lib/tierlist";
 import { resetSeq, shouldApplySeq } from "@/lib/room-seq";
 import { toast } from "sonner";
@@ -138,8 +139,9 @@ function summarizeTally(
 }
 
 export function VotingProvider({ children }: { children: React.ReactNode }) {
-  const { status, roomId, isHost, logActivity, setPresence, applySilentUpdate } =
+  const { status, roomId, isHost, members, logActivity, setPresence, applySilentUpdate } =
     useMultiplayer();
+  const recordVote = useRankForge((s) => s.recordVote);
   const [vote, setVote] = React.useState<VoteState>(EMPTY_VOTE);
   const [myVote, setMyVote] = React.useState<string | null>(null);
   const [celebration, setCelebration] = React.useState<Celebration | null>(null);
@@ -250,6 +252,35 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
       if (payload.winner) {
         placeWinner(payload.itemId, payload.winner);
 
+        const item = s.items[payload.itemId];
+        const winnerTier = s.tiers.find((t) => t.id === payload.winner);
+        if (item && winnerTier) {
+          let linkedPlayerName: string | undefined;
+          let linkedPlayerColor: string | undefined;
+          if (item.assignedUserId) {
+            const linked = members.find(
+              (m) =>
+                memberKey(m) === item.assignedUserId ||
+                m.id === item.assignedUserId
+            );
+            linkedPlayerName = linked?.name;
+            linkedPlayerColor = linked?.color;
+          }
+          recordVote([
+            {
+              id: payload.itemId,
+              label: item.label,
+              tierId: winnerTier.id,
+              tierName: winnerTier.name,
+              tierColor: winnerTier.color,
+              voteCount: payload.tally[payload.winner] ?? 0,
+              ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}),
+              ...(linkedPlayerName ? { linkedPlayerName } : {}),
+              ...(linkedPlayerColor ? { linkedPlayerColor } : {}),
+            },
+          ]);
+        }
+
         if (isHostRef.current) {
           toast.success(`"${itemName}" → ${winnerTier?.name ?? "tier"}`, {
             description: summarizeTally(payload.tally, s.tiers),
@@ -294,7 +325,7 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
       sock.off("vote:result", onResult);
       sock.off("room:error", onError);
     };
-  }, [status, roomId, setPresence, logActivity, placeWinner]);
+  }, [status, roomId, setPresence, logActivity, placeWinner, recordVote, members]);
 
   const startVote = React.useCallback(
     (item: TierItem) => {

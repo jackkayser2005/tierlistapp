@@ -32,7 +32,6 @@ import { normalizeBoard, type RankForgeBoard } from "@/lib/tierlist";
 import { useMultiplayer } from "@/hooks/use-multiplayer";
 import { ColorPicker } from "./color-picker";
 import { MultiplayerPanel } from "./multiplayer-panel";
-import { VotingControls } from "./voting-controls";
 import { ActivityFeed } from "./activity-feed";
 import { Leaderboard } from "./leaderboard";
 import { downscaleImage, readFileAsDataURL, slugify } from "@/lib/image";
@@ -543,7 +542,6 @@ export function ControlPanelContent({
     <div className={cn("space-y-7", className)}>
       <MultiplayerPanel />
       <Leaderboard />
-      <VotingControls />
       <ActivityFeed />
       {canEdit ? (
         <>
@@ -556,8 +554,7 @@ export function ControlPanelContent({
           <Eye className="mt-0.5 size-3.5 shrink-0 text-violet-300" />
           <span>
             <span className="font-medium text-foreground/80">View-only.</span>{" "}
-            The host controls the board — you can still vote and watch the
-            leaderboard update live.
+            The host controls the board — you can still vote and watch standings update live.
           </span>
         </div>
       )}

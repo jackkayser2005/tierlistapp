@@ -39,6 +39,11 @@ export function VotingControls() {
         ) : null}
       </div>
 
+      <p className="text-[11px] leading-relaxed text-muted-foreground/85">
+        Vote on <strong className="font-medium text-foreground/75">one card at a time</strong>{" "}
+        with a visible tally. Different from peer rating above (private, all cards at once).
+      </p>
+
       {/* Voting mode toggle — host only */}
       {isHost ? (
         <div className="rf-inset flex items-center justify-between gap-3 rounded-xl p-3">

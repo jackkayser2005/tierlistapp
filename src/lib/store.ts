@@ -13,19 +13,10 @@ import {
   type Tier,
   type TierItem,
 } from "./tierlist";
-import type { PeerTierLetter } from "./peer-rating";
-import { mergeRoundIntoBanked } from "./scoring";
+import { recordVoteResults, type VoteStandingEntry } from "./scoring";
 
-/** One item's result after a peer-rating round is banked. */
-export interface RoundContribution {
-  id: string;
-  tier: PeerTierLetter;
-  hiddenAverage: number;
-  label: string;
-  imageUrl?: string;
-  linkedPlayerName?: string;
-  linkedPlayerColor?: string;
-}
+/** One item's result after a group vote is recorded in standings. */
+export type VoteContribution = VoteStandingEntry;
 
 interface RankForgeState extends RankForgeBoard {
   // ---- item actions ----
@@ -58,8 +49,8 @@ interface RankForgeState extends RankForgeBoard {
   loadBoard: (board: RankForgeBoard) => void;
 
   // ---- round / scoring actions ----
-  /** Bank peer-rating round results into cumulative tier standings. */
-  bankRound: (contributions: RoundContribution[]) => void;
+  /** Record a finished group vote in standings. */
+  recordVote: (entries: VoteContribution[]) => void;
   /** Wipe all banked totals (host only). */
   resetScores: () => void;
   /** Restore banked totals to a previous snapshot (used for undo). */
@@ -291,9 +282,9 @@ export const useRankForge = create<RankForgeState>()(
           bankedScores: board.bankedScores ?? {},
         })),
 
-      bankRound: (contributions) =>
+      recordVote: (entries) =>
         set((state) => ({
-          bankedScores: mergeRoundIntoBanked(state.bankedScores, contributions),
+          bankedScores: recordVoteResults(state.bankedScores, entries),
         })),
 
       resetScores: () => set(() => ({ bankedScores: {} })),
