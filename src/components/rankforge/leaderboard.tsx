@@ -1,13 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { Trophy, Crown, Users, RotateCcw, Zap } from "lucide-react";
+import { Trophy, Crown, Users, RotateCcw, Zap, ImageIcon } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useRankForge } from "@/lib/store";
 import { useMultiplayer } from "@/hooks/use-multiplayer";
 import { usePeerRating } from "@/hooks/use-peer-rating";
-import { buildPlayerLeaderboard } from "@/lib/scoring";
+import { buildItemLeaderboard } from "@/lib/scoring";
 import { PEER_TIER_COLORS } from "@/lib/peer-rating";
 import { readableTextOn } from "@/lib/tierlist";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ function initials(name: string): string {
 }
 
 export function Leaderboard({ className }: { className?: string }) {
+  const unrankedCount = useRankForge((s) => s.unranked.length);
   const bankedScores = useRankForge((s) => s.bankedScores);
   const resetScores = useRankForge((s) => s.resetScores);
   const restoreScores = useRankForge((s) => s.restoreScores);
@@ -33,8 +34,8 @@ export function Leaderboard({ className }: { className?: string }) {
   } = usePeerRating();
 
   const rows = React.useMemo(
-    () => buildPlayerLeaderboard(bankedScores, members),
-    [bankedScores, members]
+    () => buildItemLeaderboard(bankedScores),
+    [bankedScores]
   );
 
   const canManage = status !== "connected" || isHost;
@@ -66,8 +67,8 @@ export function Leaderboard({ className }: { className?: string }) {
             Join a live room
           </p>
           <p className="mt-1.5">
-            Standings come from anonymous peer ratings — everyone privately
-            rates each player, then the group sees tier ranks only.
+            Add image cards to Unranked, optionally link them to players, then
+            run an anonymous rating round.
           </p>
         </div>
       ) : needsMorePlayers ? (
@@ -81,8 +82,8 @@ export function Leaderboard({ className }: { className?: string }) {
         <div className="rf-inset rounded-xl p-3 text-xs leading-relaxed text-muted-foreground">
           <p className="font-medium text-foreground/80">No standings yet</p>
           <p className="mt-1.5">
-            The host starts a rating round. Everyone rates each player in
-            private — results show as tier ranks (S through D).
+            Put cards in Unranked, link them to players if you want, then start
+            a rating round. Results land on the board as tier placements.
           </p>
         </div>
       ) : (
@@ -93,13 +94,13 @@ export function Leaderboard({ className }: { className?: string }) {
             const tierText = readableTextOn(tierColor);
             return (
               <div
-                key={row.userId}
+                key={row.itemId}
                 className="relative flex items-center gap-2.5 overflow-hidden rounded-lg p-2"
               >
                 <div
                   className="absolute inset-0 rounded-lg opacity-30"
                   style={{
-                    background: `linear-gradient(90deg, ${row.color}22, transparent 70%)`,
+                    background: `linear-gradient(90deg, ${row.linkedPlayerColor ?? "#64748b"}22, transparent 70%)`,
                   }}
                 />
                 <div className="relative flex min-w-0 flex-1 items-center gap-2.5">
@@ -111,19 +112,24 @@ export function Leaderboard({ className }: { className?: string }) {
                   >
                     {isLeader ? <Crown className="mx-auto size-3.5" /> : i + 1}
                   </span>
-                  <span
-                    className="grid size-8 shrink-0 place-items-center rounded-full text-[11px] font-bold text-white ring-2 ring-background"
-                    style={{ backgroundColor: row.color }}
-                  >
-                    {initials(row.name)}
-                  </span>
+                  {row.imageUrl ? (
+                    <img
+                      src={row.imageUrl}
+                      alt={row.label}
+                      className="size-8 shrink-0 rounded-lg object-cover ring-2 ring-background"
+                    />
+                  ) : (
+                    <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-white/[0.06] ring-2 ring-background">
+                      <ImageIcon className="size-3.5 text-muted-foreground" />
+                    </span>
+                  )}
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold leading-tight">
-                      {row.name}
+                      {row.label}
                     </p>
-                    {row.rounds > 1 ? (
+                    {row.linkedPlayerName ? (
                       <p className="text-[10px] text-muted-foreground">
-                        {row.rounds} rounds played
+                        {row.linkedPlayerName}
                       </p>
                     ) : null}
                   </div>
@@ -131,7 +137,6 @@ export function Leaderboard({ className }: { className?: string }) {
                 <span
                   className="relative grid min-w-[2.25rem] place-items-center rounded-lg px-2 py-1 text-lg font-black uppercase leading-none"
                   style={{ backgroundColor: tierColor, color: tierText }}
-                  title={`Tier ${row.tier}`}
                 >
                   {row.tier}
                 </span>
@@ -166,9 +171,12 @@ export function Leaderboard({ className }: { className?: string }) {
               size="sm"
               className="rf-btn-accent w-full"
               onClick={startRatingRound}
+              disabled={unrankedCount === 0}
             >
               <Users className="size-3.5" />
-              Start rating round
+              {unrankedCount > 0
+                ? `Rate ${unrankedCount} card${unrankedCount === 1 ? "" : "s"}`
+                : "Add cards to Unranked first"}
             </Button>
           )}
           {hasStandings ? (

@@ -8,6 +8,12 @@ import {
   isPeerTierLetter,
   type PeerTierLetter,
 } from "@/lib/peer-rating";
+import {
+  applyRatingPlacements,
+  buildRatingTargets,
+  type RatingTarget,
+} from "@/lib/rating-targets";
+import { resetSeq, shouldApplySeq } from "@/lib/room-seq";
 import { toast } from "sonner";
 
 export interface RatingState {
@@ -15,14 +21,17 @@ export interface RatingState {
   submittedCount: number;
   totalPeers: number;
   hasSubmitted: boolean;
+  targets: RatingTarget[];
 }
 
 export interface RatingRoundResult {
-  identityId: string;
+  itemId: string;
   tier: PeerTierLetter;
   hiddenAverage: number;
-  name: string;
-  color: string;
+  label: string;
+  imageUrl?: string;
+  linkedPlayerName?: string;
+  linkedPlayerColor?: string;
 }
 
 const EMPTY_RATING: RatingState = {
@@ -30,11 +39,11 @@ const EMPTY_RATING: RatingState = {
   submittedCount: 0,
   totalPeers: 0,
   hasSubmitted: false,
+  targets: [],
 };
 
 interface PeerRatingContextValue {
   rating: RatingState;
-  /** Latest finished round (before banked) — tiers only in UI. */
   lastResults: RatingRoundResult[] | null;
   canControl: boolean;
   startRatingRound: () => void;
@@ -55,22 +64,64 @@ const PeerRatingContext = React.createContext<PeerRatingContextValue>({
   clearLastResults: () => {},
 });
 
-function normalizeRatingState(raw: unknown): RatingState {
+function normalizeTargets(raw: unknown): RatingTarget[] {
+  if (!Array.isArray(raw)) return [];
+  const out: RatingTarget[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const t = entry as Record<string, unknown>;
+    const id = typeof t.id === "string" ? t.id : "";
+    const label = typeof t.label === "string" ? t.label : "";
+    if (!id || !label) continue;
+    out.push({
+      id,
+      label,
+      ...(typeof t.imageUrl === "string" ? { imageUrl: t.imageUrl } : {}),
+      ...(typeof t.linkedPlayerId === "string"
+        ? { linkedPlayerId: t.linkedPlayerId }
+        : {}),
+      ...(typeof t.linkedPlayerName === "string"
+        ? { linkedPlayerName: t.linkedPlayerName }
+        : {}),
+      ...(typeof t.linkedPlayerColor === "string"
+        ? { linkedPlayerColor: t.linkedPlayerColor }
+        : {}),
+    });
+  }
+  return out;
+}
+
+function normalizeRatingState(
+  raw: unknown,
+  localIdentityId?: string,
+): RatingState {
   if (!raw || typeof raw !== "object") return EMPTY_RATING;
   const p = raw as Record<string, unknown>;
+  const submittedIdentityIds = Array.isArray(p.submittedIdentityIds)
+    ? (p.submittedIdentityIds as unknown[]).filter(
+        (id): id is string => typeof id === "string"
+      )
+    : [];
+  const hasSubmitted = localIdentityId
+    ? submittedIdentityIds.includes(localIdentityId)
+    : !!p.hasSubmitted;
   return {
     active: !!p.active,
     submittedCount:
-      typeof p.submittedCount === "number" ? p.submittedCount : 0,
+      typeof p.submittedCount === "number"
+        ? p.submittedCount
+        : submittedIdentityIds.length,
     totalPeers: typeof p.totalPeers === "number" ? p.totalPeers : 0,
-    hasSubmitted: !!p.hasSubmitted,
+    hasSubmitted,
+    targets: normalizeTargets(p.targets),
   };
 }
 
 export function PeerRatingProvider({ children }: { children: React.ReactNode }) {
-  const { roomId, isHost, status, members, logActivity } =
+  const { roomId, isHost, status, members, user, logActivity, applySilentUpdate } =
     useMultiplayer();
   const bankRound = useRankForge((s) => s.bankRound);
+  const moveItem = useRankForge((s) => s.moveItem);
 
   const [rating, setRating] = React.useState<RatingState>(EMPTY_RATING);
   const [lastResults, setLastResults] = React.useState<
@@ -79,77 +130,143 @@ export function PeerRatingProvider({ children }: { children: React.ReactNode }) 
 
   const isHostRef = React.useRef(isHost);
   const roomIdRef = React.useRef(roomId);
+  const userIdRef = React.useRef(user.id);
+  const ratingSeqRef = React.useRef(0);
   React.useEffect(() => {
     isHostRef.current = isHost;
     roomIdRef.current = roomId;
-  }, [isHost, roomId]);
+    userIdRef.current = user.id;
+  }, [isHost, roomId, user.id]);
 
   React.useEffect(() => {
-    if (status !== "connected" || !roomId) {
-      setRating(EMPTY_RATING);
-      return;
-    }
+    if (status === "connected" && roomId) return;
+    resetSeq(ratingSeqRef);
+    setRating(EMPTY_RATING);
+  }, [status, roomId]);
+
+  React.useEffect(() => {
+    const inRoom =
+      !!roomId && (status === "connecting" || status === "connected");
+    if (!inRoom) return;
 
     const sock = getSocket();
     if (!sock) return;
 
     const onState = (payload: unknown) => {
-      setRating(normalizeRatingState(payload));
+      if (!roomIdRef.current) return;
+      const p = payload as Record<string, unknown>;
+      if (!shouldApplySeq(ratingSeqRef, p.seq)) return;
+      setRating(normalizeRatingState(payload, userIdRef.current));
     };
 
     const onResult = (payload: unknown) => {
+      if (!roomIdRef.current) return;
       if (!payload || typeof payload !== "object") return;
       const p = payload as {
         results?: Record<
           string,
-          { tier: string; hiddenAverage?: number; name: string; color: string }
+          {
+            tier: string;
+            hiddenAverage?: number;
+            label: string;
+            imageUrl?: string;
+            linkedPlayerName?: string;
+            linkedPlayerColor?: string;
+          }
         >;
+        placements?: { itemId: string; tier: string }[];
       };
       const raw = p.results ?? {};
+      const placements = Array.isArray(p.placements) ? p.placements : [];
 
       const merged: RatingRoundResult[] = Object.entries(raw).map(
-        ([identityId, row]) => ({
-          identityId,
+        ([itemId, row]) => ({
+          itemId,
           tier: isPeerTierLetter(row.tier) ? row.tier : "D",
           hiddenAverage:
             typeof row.hiddenAverage === "number" ? row.hiddenAverage : 0,
-          name: row.name,
-          color: row.color,
+          label: row.label,
+          imageUrl: row.imageUrl,
+          linkedPlayerName: row.linkedPlayerName,
+          linkedPlayerColor: row.linkedPlayerColor,
         })
       );
+
+      const applyPlacements = () => {
+        const state = useRankForge.getState();
+        const typed = placements
+          .filter(
+            (pl): pl is { itemId: string; tier: PeerTierLetter } =>
+              typeof pl.itemId === "string" &&
+              isPeerTierLetter(pl.tier)
+          )
+          .map((pl) => ({ itemId: pl.itemId, tier: pl.tier }));
+        return applyRatingPlacements(
+          state.tiers,
+          state.unranked,
+          typed,
+          moveItem
+        );
+      };
+
+      if (isHostRef.current) {
+        const moved = applyPlacements();
+        if (moved > 0) {
+          logActivity("moved", `${moved} cards placed from ratings`);
+        }
+      } else {
+        applySilentUpdate(applyPlacements);
+      }
 
       setLastResults(merged);
       setRating(EMPTY_RATING);
 
       bankRound(
         merged.map((r) => ({
-          id: r.identityId,
+          id: r.itemId,
           tier: r.tier,
           hiddenAverage: r.hiddenAverage,
-          name: r.name,
-          color: r.color,
+          label: r.label,
+          imageUrl: r.imageUrl,
+          linkedPlayerName: r.linkedPlayerName,
+          linkedPlayerColor: r.linkedPlayerColor,
         }))
       );
 
-      const top = merged.sort(
-        (a, b) =>
-          "SABCD".indexOf(a.tier) - "SABCD".indexOf(b.tier)
+      const top = [...merged].sort(
+        (a, b) => "SABCD".indexOf(a.tier) - "SABCD".indexOf(b.tier)
       )[0];
       toast.success(
-        top ? `Round complete — ${top.name} leads at ${top.tier}` : "Round complete",
-        { description: "Standings updated on the leaderboard." }
+        top
+          ? `Round complete — ${top.label} landed in ${top.tier}`
+          : "Round complete",
+        {
+          description: "Cards moved to their tiers. Discuss and adjust from here.",
+        }
       );
-      logActivity("rating_ended", "Peer rating round");
+      logActivity("rating_ended", "Rating round");
+    };
+
+    const onError = (payload: { event?: string; message?: string }) => {
+      if (payload?.event?.startsWith("rating")) {
+        toast.error(payload.message ?? "Rating error");
+      }
     };
 
     sock.on("rating:state", onState);
     sock.on("rating:result", onResult);
+    sock.on("room:error", onError);
+
+    if (status === "connected") {
+      sock.emit("rating:sync-request", { roomId });
+    }
 
     return () => {
       sock.off("rating:state", onState);
       sock.off("rating:result", onResult);
+      sock.off("room:error", onError);
     };
-  }, [status, roomId, members, bankRound, logActivity]);
+  }, [status, roomId, bankRound, logActivity, moveItem, applySilentUpdate]);
 
   const startRatingRound = React.useCallback(() => {
     if (!roomIdRef.current) {
@@ -164,24 +281,28 @@ export function PeerRatingProvider({ children }: { children: React.ReactNode }) 
       toast.error("Need at least 2 players in the room");
       return;
     }
+
+    const state = useRankForge.getState();
+    const targets = buildRatingTargets(state.items, state.unranked, members);
+    if (targets.length === 0) {
+      toast.error("Add cards to Unranked first", {
+        description: "Link player photos to cards, then start the round.",
+      });
+      return;
+    }
+
     const sock = getSocket();
     if (!sock?.connected) {
       toast.error("Not connected to the room server");
       return;
     }
     setLastResults(null);
-    sock.emit("rating:start", { roomId: roomIdRef.current });
-    setRating({
-      active: true,
-      submittedCount: 0,
-      totalPeers: members.length,
-      hasSubmitted: false,
-    });
-    logActivity("rating_started", "Anonymous peer ratings");
+    sock.emit("rating:start", { roomId: roomIdRef.current, targets });
+    logActivity("rating_started", `${targets.length} cards up for rating`);
     toast("Rating round started", {
-      description: "Rate each player — your votes stay private.",
+      description: "Rate each card — your votes stay private.",
     });
-  }, [members.length, logActivity]);
+  }, [members, logActivity]);
 
   const submitBallot = React.useCallback(
     (votes: Record<string, PeerTierLetter>) => {

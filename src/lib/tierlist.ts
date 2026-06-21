@@ -11,7 +11,7 @@ export interface TierItem {
   label: string;
   /** Present only for image items. May be a remote URL or a local /public path. */
   imageUrl?: string;
-  /** The room user id this item is "owned" by (for leaderboard scoring). */
+  /** The stable player id this card represents (optional — card can still be voted without one). */
   assignedUserId?: string;
 }
 
@@ -27,10 +27,12 @@ export interface Tier {
 /** Special container id used for the unranked pool. */
 export const UNRANKED_ID = "__unranked__";
 
-/** Cumulative peer-rating result for a player across finished rounds. */
+/** Cumulative peer-rating result for an item across finished rounds. */
 export interface BankedScore {
-  name: string;
-  color: string;
+  label: string;
+  imageUrl?: string;
+  linkedPlayerName?: string;
+  linkedPlayerColor?: string;
   /** Display tier on the leaderboard — never expose numeric points. */
   tier: PeerTierLetter;
   /** Internal running average of hidden vote weights — never shown in UI. */
@@ -47,7 +49,7 @@ export interface RankForgeBoard {
   tierItems: Record<string, string[]>;
   /** ordered item ids in the unranked pool. */
   unranked: string[];
-  /** identityId -> cumulative peer-rating tier across finished rounds. */
+  /** itemId -> cumulative peer-rating tier across finished rounds. */
   bankedScores: Record<string, BankedScore>;
 }
 
@@ -299,8 +301,23 @@ export function normalizeBoard(input: unknown): RankForgeBoard {
     for (const [id, raw] of Object.entries(bankedSrc as Record<string, unknown>)) {
       if (!raw || typeof raw !== "object") continue;
       const b = raw as Record<string, unknown>;
-      const name = typeof b.name === "string" ? b.name : "Player";
-      const color = typeof b.color === "string" ? b.color : "#64748b";
+      const name = typeof b.name === "string" ? b.name : "Item";
+      const label =
+        typeof b.label === "string" ? b.label : name;
+      const imageUrl =
+        typeof b.imageUrl === "string" ? b.imageUrl : undefined;
+      const linkedPlayerName =
+        typeof b.linkedPlayerName === "string"
+          ? b.linkedPlayerName
+          : typeof b.name === "string" && !b.label
+            ? b.name
+            : undefined;
+      const linkedPlayerColor =
+        typeof b.linkedPlayerColor === "string"
+          ? b.linkedPlayerColor
+          : typeof b.color === "string"
+            ? b.color
+            : undefined;
       const legacyScore =
         typeof b.score === "number" && isFinite(b.score) ? b.score : null;
       const hiddenAverage =
@@ -318,7 +335,15 @@ export function normalizeBoard(input: unknown): RankForgeBoard {
         tierRaw && isPeerTierLetter(tierRaw)
           ? tierRaw
           : hiddenAverageToTier(hiddenAverage);
-      bankedScores[id] = { name, color, tier, hiddenAverage, rounds };
+      bankedScores[id] = {
+        label,
+        ...(imageUrl ? { imageUrl } : {}),
+        ...(linkedPlayerName ? { linkedPlayerName } : {}),
+        ...(linkedPlayerColor ? { linkedPlayerColor } : {}),
+        tier,
+        hiddenAverage,
+        rounds,
+      };
     }
   }
 

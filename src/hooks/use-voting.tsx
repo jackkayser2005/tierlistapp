@@ -5,6 +5,7 @@ import { useRankForge } from "@/lib/store";
 import { getSocket } from "@/lib/socket";
 import { useMultiplayer } from "./use-multiplayer";
 import type { TierItem } from "@/lib/tierlist";
+import { resetSeq, shouldApplySeq } from "@/lib/room-seq";
 import { toast } from "sonner";
 
 export interface VoteTally {
@@ -73,16 +74,20 @@ const VotingContext = React.createContext<VotingContextValue>({
 });
 
 /** Normalize a server vote:state payload into a typed client VoteState. */
-function normalizeVoteState(raw: unknown): VoteState {
+function normalizeVoteState(
+  raw: unknown,
+  previous: VoteState = EMPTY_VOTE,
+): VoteState {
   if (!raw || typeof raw !== "object") return EMPTY_VOTE;
   const p = raw as Record<string, unknown>;
   if (!p.active) return EMPTY_VOTE;
 
+  const itemId = typeof p.itemId === "string" ? p.itemId : null;
   const itemRaw = p.item;
   let item: TierItem | null = null;
   if (itemRaw && typeof itemRaw === "object" && !Array.isArray(itemRaw)) {
     const it = itemRaw as Record<string, unknown>;
-    const id = typeof it.id === "string" ? it.id : String(p.itemId ?? "");
+    const id = typeof it.id === "string" ? it.id : String(itemId ?? "");
     const label = typeof it.label === "string" ? it.label : "Item";
     item = {
       id,
@@ -90,6 +95,13 @@ function normalizeVoteState(raw: unknown): VoteState {
       label,
       ...(typeof it.imageUrl === "string" ? { imageUrl: it.imageUrl } : {}),
     };
+  } else if (
+    itemId &&
+    previous.itemId === itemId &&
+    previous.item
+  ) {
+    // Tally-only relay from vote:cast — reuse cached item.
+    item = previous.item;
   }
 
   const tally: VoteTally = {};
@@ -101,7 +113,7 @@ function normalizeVoteState(raw: unknown): VoteState {
 
   return {
     active: true,
-    itemId: typeof p.itemId === "string" ? p.itemId : null,
+    itemId,
     item,
     tally,
     voterCount: typeof p.voterCount === "number" ? p.voterCount : 0,
@@ -139,6 +151,7 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
   const voteRef = React.useRef(vote);
   voteRef.current = vote;
   const celebrationTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voteSeqRef = React.useRef(0);
 
   React.useEffect(() => {
     isHostRef.current = isHost;
@@ -149,6 +162,16 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     myVoteRef.current = myVote;
   }, [myVote]);
+
+  // Reset local vote UI when leaving a room.
+  React.useEffect(() => {
+    if (status === "connected" && roomId) return;
+    resetSeq(voteSeqRef);
+    setVote(EMPTY_VOTE);
+    setMyVote(null);
+    myVoteRef.current = null;
+    activeItemRef.current = null;
+  }, [status, roomId]);
 
   const dismissCelebration = React.useCallback(() => {
     if (celebrationTimerRef.current) {
@@ -177,21 +200,22 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
     [applySilentUpdate]
   );
 
-  // ---- Socket listeners: register BEFORE any sync emit (fixes race) ----
+  // ---- Socket listeners: attach while connecting so room:join hydration
+  // cannot arrive before handlers are registered. Sync once connected.
   React.useEffect(() => {
-    if (status !== "connected" || !roomId) {
-      setVote(EMPTY_VOTE);
-      setMyVote(null);
-      myVoteRef.current = null;
-      activeItemRef.current = null;
-      return;
-    }
+    const inRoom =
+      !!roomId && (status === "connecting" || status === "connected");
+    if (!inRoom) return;
 
     const sock = getSocket();
     if (!sock) return;
 
     const onState = (payload: unknown) => {
-      const next = normalizeVoteState(payload);
+      if (!roomIdRef.current) return;
+      const p = payload as Record<string, unknown>;
+      if (!shouldApplySeq(voteSeqRef, p.seq)) return;
+
+      const next = normalizeVoteState(payload, voteRef.current);
       if (!next.active) {
         setVote(EMPTY_VOTE);
         setMyVote(null);
@@ -204,21 +228,15 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
       setVote(next);
       setPresence("voting");
 
-      // Reset my pick when a new item is up for vote.
       if (activeItemRef.current !== next.itemId) {
         activeItemRef.current = next.itemId;
         setMyVote(null);
         myVoteRef.current = null;
       }
-
-      // Reconcile myVote from server voters list when we have a socket id.
-      const mySocketId = sock.id;
-      if (mySocketId && next.voters.includes(mySocketId) && !myVoteRef.current) {
-        // Server doesn't echo tier choice in vote:state — keep local myVote if set.
-      }
     };
 
     const onResult = (payload: VoteResult) => {
+      if (!roomIdRef.current) return;
       setVote(EMPTY_VOTE);
       setMyVote(null);
       myVoteRef.current = null;
@@ -267,8 +285,9 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
     sock.on("vote:result", onResult);
     sock.on("room:error", onError);
 
-    // Sync AFTER listeners are attached.
-    sock.emit("vote:sync-request", { roomId });
+    if (status === "connected") {
+      sock.emit("vote:sync-request", { roomId });
+    }
 
     return () => {
       sock.off("vote:state", onState);
@@ -295,7 +314,12 @@ export function VotingProvider({ children }: { children: React.ReactNode }) {
       sock.emit("vote:start", {
         roomId: roomIdRef.current,
         itemId: item.id,
-        item,
+        item: {
+          id: item.id,
+          type: item.type,
+          label: item.label,
+          ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}),
+        },
       });
 
       // Optimistically show the overlay for the host immediately — the server

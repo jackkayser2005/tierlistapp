@@ -1,51 +1,44 @@
 "use client";
 
 import type { BankedScore } from "./tierlist";
-import type { RoomUser } from "./presence";
-import { memberKey } from "./presence";
 import {
   compareTiers,
   hiddenAverageToTier,
   type PeerTierLetter,
 } from "./peer-rating";
 
-export interface RankedPlayer {
-  userId: string;
-  user: RoomUser | null;
+export interface RankedItem {
+  itemId: string;
   tier: PeerTierLetter;
-  name: string;
-  color: string;
+  label: string;
+  imageUrl?: string;
+  linkedPlayerName?: string;
+  linkedPlayerColor?: string;
   rounds: number;
 }
 
-function resolveMember(id: string, members: RoomUser[]): RoomUser | null {
-  for (const m of members) {
-    if (memberKey(m) === id || m.id === id) return m;
-  }
-  return null;
-}
+/** Build a sorted leaderboard from banked item ratings (tiers only, no points). */
+export function buildItemLeaderboard(
+  bankedScores: Record<string, BankedScore>
+): RankedItem[] {
+  const rows: RankedItem[] = [];
 
-/** Build a sorted leaderboard from banked peer-rating results (tiers only, no points). */
-export function buildPlayerLeaderboard(
-  bankedScores: Record<string, BankedScore>,
-  members: RoomUser[]
-): RankedPlayer[] {
-  const rows: RankedPlayer[] = [];
-
-  for (const [userId, b] of Object.entries(bankedScores)) {
-    const member = resolveMember(userId, members);
+  for (const [itemId, b] of Object.entries(bankedScores)) {
     rows.push({
-      userId,
-      user: member,
+      itemId,
       tier: b.tier,
-      name: member?.name ?? b.name,
-      color: member?.color ?? b.color,
+      label: b.label,
+      imageUrl: b.imageUrl,
+      linkedPlayerName: b.linkedPlayerName,
+      linkedPlayerColor: b.linkedPlayerColor,
       rounds: b.rounds ?? 1,
     });
   }
 
   rows.sort(
-    (a, b) => compareTiers(a.tier, b.tier) || a.name.localeCompare(b.name)
+    (a, b) =>
+      compareTiers(a.tier, b.tier) ||
+      a.label.localeCompare(b.label)
   );
   return rows;
 }
@@ -57,8 +50,10 @@ export function mergeRoundIntoBanked(
     id: string;
     tier: PeerTierLetter;
     hiddenAverage: number;
-    name: string;
-    color: string;
+    label: string;
+    imageUrl?: string;
+    linkedPlayerName?: string;
+    linkedPlayerColor?: string;
   }[]
 ): Record<string, BankedScore> {
   const next: Record<string, BankedScore> = {};
@@ -70,18 +65,27 @@ export function mergeRoundIntoBanked(
     if (prev) {
       const rounds = (prev.rounds ?? 1) + 1;
       const hiddenAverage =
-        ((prev.hiddenAverage ?? 0) * (prev.rounds ?? 1) + r.hiddenAverage) / rounds;
+        ((prev.hiddenAverage ?? 0) * (prev.rounds ?? 1) + r.hiddenAverage) /
+        rounds;
       next[r.id] = {
-        name: r.name,
-        color: r.color,
+        label: r.label,
+        ...(r.imageUrl ? { imageUrl: r.imageUrl } : {}),
+        ...(r.linkedPlayerName ? { linkedPlayerName: r.linkedPlayerName } : {}),
+        ...(r.linkedPlayerColor
+          ? { linkedPlayerColor: r.linkedPlayerColor }
+          : {}),
         tier: hiddenAverageToTier(hiddenAverage),
         hiddenAverage,
         rounds,
       };
     } else {
       next[r.id] = {
-        name: r.name,
-        color: r.color,
+        label: r.label,
+        ...(r.imageUrl ? { imageUrl: r.imageUrl } : {}),
+        ...(r.linkedPlayerName ? { linkedPlayerName: r.linkedPlayerName } : {}),
+        ...(r.linkedPlayerColor
+          ? { linkedPlayerColor: r.linkedPlayerColor }
+          : {}),
         tier: r.tier,
         hiddenAverage: r.hiddenAverage,
         rounds: 1,

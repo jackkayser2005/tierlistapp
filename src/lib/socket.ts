@@ -3,7 +3,7 @@
 import { io, type Socket } from "socket.io-client";
 
 /**
- * Shared socket.io singleton. Both useMultiplayer and useVoting attach
+ * Shared socket.io singleton. Multiplayer, voting, and peer-rating hooks attach
  * listeners to this one connection so we never open two sockets.
  *
  * In production, set NEXT_PUBLIC_ROOM_SERVICE_URL to your hosted backend

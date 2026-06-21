@@ -16,13 +16,15 @@ import {
 import type { PeerTierLetter } from "./peer-rating";
 import { mergeRoundIntoBanked } from "./scoring";
 
-/** One player's result after a peer-rating round is banked. */
+/** One item's result after a peer-rating round is banked. */
 export interface RoundContribution {
   id: string;
   tier: PeerTierLetter;
   hiddenAverage: number;
-  name: string;
-  color: string;
+  label: string;
+  imageUrl?: string;
+  linkedPlayerName?: string;
+  linkedPlayerColor?: string;
 }
 
 interface RankForgeState extends RankForgeBoard {

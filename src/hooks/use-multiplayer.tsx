@@ -297,29 +297,35 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
     }, 0);
   }, []);
 
-  // ---- Throttled board broadcast (debounce 140ms, signature-deduped) ----
-  const scheduleBoardEmit = React.useCallback((roomId: string) => {
-    pendingBoardRef.current = snapshotBoard(useRankForge.getState());
-    if (boardEmitTimerRef.current) return;
-    boardEmitTimerRef.current = setTimeout(() => {
-      boardEmitTimerRef.current = null;
-      const board = pendingBoardRef.current;
-      pendingBoardRef.current = null;
-      if (!board) return;
-      const sig = JSON.stringify(board);
-      if (sig === lastSigRef.current) return; // nothing actually changed
-      lastSigRef.current = sig;
-      const eventId = nextEventId();
-      const sent = sentEventIdsRef.current;
-      sent.add(eventId);
-      if (sent.size > 32) {
-        // keep the set bounded
-        const first = sent.values().next().value;
-        if (first) sent.delete(first);
-      }
-      socketRef.current?.emit("board:update", { roomId, board, eventId });
-    }, 140);
+  // ---- Throttled board broadcast (debounce 200ms, signature-deduped) ----
+  const flushBoardEmit = React.useCallback((roomId: string) => {
+    const board = pendingBoardRef.current ?? snapshotBoard(useRankForge.getState());
+    pendingBoardRef.current = null;
+    if (!board) return;
+    const sig = JSON.stringify(board);
+    if (sig === lastSigRef.current) return;
+    lastSigRef.current = sig;
+    const eventId = nextEventId();
+    const sent = sentEventIdsRef.current;
+    sent.add(eventId);
+    if (sent.size > 32) {
+      const first = sent.values().next().value;
+      if (first) sent.delete(first);
+    }
+    socketRef.current?.emit("board:update", { roomId, board, eventId });
   }, []);
+
+  const scheduleBoardEmit = React.useCallback(
+    (roomId: string) => {
+      pendingBoardRef.current = snapshotBoard(useRankForge.getState());
+      if (boardEmitTimerRef.current) return;
+      boardEmitTimerRef.current = setTimeout(() => {
+        boardEmitTimerRef.current = null;
+        flushBoardEmit(roomId);
+      }, 200);
+    },
+    [flushBoardEmit]
+  );
 
   // ---- Subscribe to local store changes and broadcast (when connected) ----
   React.useEffect(() => {
@@ -363,9 +369,10 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       emitIdentity(getLocalUser());
       const currentRoom = getRoomFromUrl();
       if (currentRoom) {
-        sock.emit("room:join", { roomId: currentRoom });
-        sock.emit("vote:sync-request", { roomId: currentRoom });
-        sock.emit("rating:sync-request", { roomId: currentRoom });
+        // Defer so vote/rating listeners attach while status is still connecting.
+        setTimeout(() => {
+          sock.emit("room:join", { roomId: currentRoom });
+        }, 0);
       }
     });
 
@@ -407,7 +414,9 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
   const joinRoom = React.useCallback(
     (roomId: string, asHost: boolean) => {
       const sock = connect();
-      setState((s) => ({ ...s, status: "connecting" }));
+      // Set roomId immediately so vote/rating child listeners attach before
+      // the deferred room:join hydration (vote:state / rating:state).
+      setState((s) => ({ ...s, status: "connecting", roomId }));
 
       sock.off("room:state").on("room:state", (payload: ServerRoomState) => {
         handleState(payload, asHost);
@@ -465,9 +474,10 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       });
 
       const board = asHost ? snapshotBoard(useRankForge.getState()) : undefined;
-      sock.emit("room:join", { roomId, board });
-      sock.emit("vote:sync-request", { roomId });
-      sock.emit("rating:sync-request", { roomId });
+      // Defer join so child providers register vote/rating listeners first.
+      setTimeout(() => {
+        sock.emit("room:join", { roomId, board });
+      }, 0);
     },
     [connect, handleState, applyRemoteBoard]
   );
@@ -479,6 +489,14 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
 
   const leaveRoom = React.useCallback(() => {
     const sock = socketRef.current;
+    const pendingRoom = getRoomFromUrl();
+    if (boardEmitTimerRef.current) {
+      clearTimeout(boardEmitTimerRef.current);
+      boardEmitTimerRef.current = null;
+    }
+    if (pendingRoom && pendingBoardRef.current) {
+      flushBoardEmit(pendingRoom);
+    }
     if (sock) {
       sock.removeAllListeners();
       socketRef.current = null;
@@ -498,7 +516,7 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       hostId: null,
     });
     toast("Left the room");
-  }, []);
+  }, [flushBoardEmit]);
 
   // ---- Presence (throttled to 400ms) ----
   const setPresence = React.useCallback((p: PresenceState) => {

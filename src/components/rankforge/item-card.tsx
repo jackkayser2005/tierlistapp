@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Trash2, Pencil, ImageOff, CornerDownLeft } from "lucide-react";
+import { Trash2, Pencil, ImageOff, CornerDownLeft, UserPlus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { useRankForge } from "@/lib/store";
 import { UNRANKED_ID, type TierItem } from "@/lib/tierlist";
 import { useMultiplayer, useItemFocus } from "@/hooks/use-multiplayer";
+import { memberKey } from "@/lib/presence";
 import { useVotingMode } from "./voting-context";
 import { VoteButton } from "./voting-overlay";
 import { toast } from "sonner";
@@ -149,7 +150,7 @@ interface SortableItemCardProps {
 }
 
 export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
-  const { setFocus, clearFocus, status, canEdit, logActivity } =
+  const { setFocus, clearFocus, status, assignableMembers, canEdit, logActivity } =
     useMultiplayer();
   const {
     attributes,
@@ -169,9 +170,16 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
   const findContainerOf = useRankForge((s) => s.findContainerOf);
   const indexOfItem = useRankForge((s) => s.indexOfItem);
   const updateItemLabel = useRankForge((s) => s.updateItemLabel);
+  const assignItem = useRankForge((s) => s.assignItem);
   const { votingMode } = useVotingMode();
   const focus = useItemFocus(item.id);
+  const assignedMember = item.assignedUserId
+    ? assignableMembers.find(
+        (m) => memberKey(m) === item.assignedUserId || m.id === item.assignedUserId
+      )
+    : undefined;
   const [editOpen, setEditOpen] = React.useState(false);
+  const [linkOpen, setLinkOpen] = React.useState(false);
   const [draft, setDraft] = React.useState(item.label);
 
   React.useEffect(() => {
@@ -232,6 +240,8 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
           item={item}
           focusColor={focusColor}
           focusName={focusName}
+          assignedAvatarColor={assignedMember?.color}
+          assignedAvatarName={assignedMember?.name}
         />
       </div>
 
@@ -297,6 +307,66 @@ export function SortableItemCard({ item, containerId }: SortableItemCardProps) {
             </div>
           </PopoverContent>
         </Popover>
+
+        {assignableMembers.length > 0 ? (
+          <Popover open={linkOpen} onOpenChange={setLinkOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                size="icon"
+                variant="secondary"
+                className={cn(
+                  "size-6 rounded-full border border-white/10 bg-background/95 shadow-md backdrop-blur hover:bg-background",
+                  item.assignedUserId && "ring-2 ring-violet-400/50"
+                )}
+                aria-label={`Link ${item.label} to a player`}
+              >
+                <UserPlus className="size-3" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-52 p-2" align="end">
+              <div className="space-y-1">
+                <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
+                  Link to player
+                </p>
+                {item.assignedUserId ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start text-destructive hover:text-destructive"
+                    onClick={() => {
+                      assignItem(item.id, undefined);
+                      setLinkOpen(false);
+                    }}
+                  >
+                    <X className="size-3.5" /> Unlink
+                  </Button>
+                ) : null}
+                {assignableMembers.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => {
+                      assignItem(item.id, memberKey(m));
+                      setLinkOpen(false);
+                      toast.success(`Linked to ${m.name}`);
+                    }}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-white/[0.06]",
+                      item.assignedUserId === memberKey(m) && "bg-white/[0.04]"
+                    )}
+                  >
+                    <span
+                      className="grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white"
+                      style={{ backgroundColor: m.color }}
+                    >
+                      {initials(m.name)}
+                    </span>
+                    <span className="truncate">{m.name}</span>
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+        ) : null}
 
         <Button
           size="icon"
