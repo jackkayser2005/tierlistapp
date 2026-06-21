@@ -94,17 +94,6 @@ export function TierRow({ tier, index, total, isHighlighted }: TierRowProps) {
           />
         </div>
 
-        {/* points badge */}
-        <div className="relative flex items-center justify-center">
-          <span
-            className="rounded-full px-1.5 py-0.5 text-[9px] font-bold backdrop-blur-sm"
-            style={{ background: "rgba(0,0,0,0.25)", color: textColor }}
-            title={`${tier.points} point${tier.points === 1 ? "" : "s"} per item`}
-          >
-            {tier.points}pt
-          </span>
-        </div>
-
         {/* subtle controls — appear on hover, secondary; host/solo only */}
         {canEdit ? (
         <div

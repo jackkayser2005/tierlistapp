@@ -69,6 +69,10 @@ interface ActivityEntry {
     | 'voted'
     | 'vote_ended'
     | 'vote_cancelled'
+    | 'rating_started'
+    | 'rating_submitted'
+    | 'rating_ended'
+    | 'rating_cancelled'
   detail: string // human-readable, e.g. "Street Tacos to A", "S for Arcade Night"
   ts: number // epoch ms
 }
@@ -81,6 +85,13 @@ interface VoteState {
   startedBy: string // socket id of the host who started it
 }
 
+/** Anonymous peer-rating round — each member rates every other member on S–D. */
+interface PeerRatingState {
+  /** voter identityId -> target identityId -> tier letter (S/A/B/C/D) */
+  ballots: Map<string, Map<string, string>>
+  startedBy: string
+}
+
 /** Full per-room state. */
 interface RoomState {
   /** socket id -> User. Map preserves insertion order = join order. */
@@ -89,8 +100,10 @@ interface RoomState {
   host: string | null
   /** latest board snapshot so late joiners can hydrate immediately. */
   board: Board
-  /** active vote, if any; null when no vote is in progress. */
+  /** active item vote, if any; null when no vote is in progress. */
   vote: VoteState | null
+  /** active anonymous peer-rating round */
+  peerRating: PeerRatingState | null
   /** last 40 activity entries, newest last. */
   activity: ActivityEntry[]
   /** server sequence counter; increments on each state-changing broadcast. */
@@ -127,7 +140,34 @@ const ALLOWED_ACTIONS = new Set([
   'voted',
   'vote_ended',
   'vote_cancelled',
+  'rating_started',
+  'rating_submitted',
+  'rating_ended',
+  'rating_cancelled',
 ])
+
+/** Hidden peer-rating weights — never sent to clients. */
+const PEER_TIER_VALUE: Record<string, number> = {
+  D: 0,
+  C: 1,
+  B: 2,
+  A: 3,
+  S: 4.35,
+}
+const PEER_VALUE_TO_TIER = ['D', 'C', 'B', 'A', 'S'] as const
+
+function peerTierValue(letter: string): number {
+  return PEER_TIER_VALUE[letter] ?? 0
+}
+
+function hiddenAverageToPeerTier(avg: number): string {
+  const idx = Math.min(4, Math.max(0, Math.floor(avg)))
+  return PEER_VALUE_TO_TIER[idx]
+}
+
+function isPeerTierLetter(v: string): boolean {
+  return v === 'S' || v === 'A' || v === 'B' || v === 'C' || v === 'D'
+}
 
 // ---------------------------------------------------------------------------
 // In-memory store
@@ -180,6 +220,7 @@ function getOrCreateRoom(roomId: string): RoomState {
       host: null,
       board: null,
       vote: null,
+      peerRating: null,
       activity: [],
       seq: 0,
     }
@@ -313,6 +354,69 @@ function voteStatePayload(room: RoomState, seq?: number): {
     voters,
     seq: seq ?? room.seq,
   }
+}
+
+/** Build rating:state — never exposes individual ballots. */
+function ratingStatePayload(
+  room: RoomState,
+  viewerIdentityId?: string,
+  seq?: number,
+): {
+  active: boolean
+  submittedCount: number
+  totalPeers: number
+  hasSubmitted: boolean
+  seq: number
+} {
+  const rating = room.peerRating
+  let submittedCount = 0
+  if (rating) submittedCount = rating.ballots.size
+  const hasSubmitted =
+    !!rating &&
+    !!viewerIdentityId &&
+    rating.ballots.has(viewerIdentityId)
+  return {
+    active: !!rating,
+    submittedCount,
+    totalPeers: room.members.size,
+    hasSubmitted,
+    seq: seq ?? room.seq,
+  }
+}
+
+function computePeerRatingResults(room: RoomState): Record<
+  string,
+  { tier: string; hiddenAverage: number; name: string; color: string }
+> {
+  const rating = room.peerRating
+  if (!rating) return {}
+  const members = Array.from(room.members.values())
+  const results: Record<
+    string,
+    { tier: string; hiddenAverage: number; name: string; color: string }
+  > = {}
+
+  for (const target of members) {
+    const targetId = target.identityId
+    let sum = 0
+    let count = 0
+    for (const ballot of rating.ballots.values()) {
+      const pick = ballot.get(targetId)
+      if (!pick || !isPeerTierLetter(pick)) continue
+      sum += peerTierValue(pick)
+      count += 1
+    }
+    if (count === 0) continue
+    const playerCount = Math.max(1, members.length)
+    const hiddenAverage = sum / playerCount
+    results[targetId] = {
+      tier: hiddenAverageToPeerTier(hiddenAverage),
+      hiddenAverage,
+      name: target.name,
+      color: target.color,
+    }
+  }
+  return results
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +614,15 @@ io.on('connection', (socket: Socket) => {
         socket.emit('vote:state', voteStatePayload(room))
       }
 
-      // 5. Broadcast presence to the whole room (including joiner).
+      // 5. If a peer-rating round is active, hydrate the joiner.
+      if (room.peerRating) {
+        socket.emit(
+          'rating:state',
+          ratingStatePayload(room, user.identityId),
+        )
+      }
+
+      // 6. Broadcast presence to the whole room (including joiner).
       broadcastPresence(io, room, roomId)
 
       // 6. Push + broadcast "joined" activity to the whole room.
@@ -913,6 +1025,193 @@ io.on('connection', (socket: Socket) => {
     }
   })
 
+  // ----- rating:sync-request ----------------------------------------------
+  socket.on('rating:sync-request', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId : ''
+      const room = roomId ? rooms.get(roomId) : undefined
+      const identity = socket.data?.identity as { identityId?: string } | undefined
+      const viewerId = identity?.identityId ?? socket.id
+      socket.emit(
+        'rating:state',
+        room
+          ? ratingStatePayload(room, viewerId)
+          : {
+              active: false,
+              submittedCount: 0,
+              totalPeers: 0,
+              hasSubmitted: false,
+              seq: 0,
+            },
+      )
+    } catch (err) {
+      console.error(`[rating:sync-request] error from ${socket.id}:`, err)
+    }
+  })
+
+  // ----- rating:start ------------------------------------------------------
+  socket.on('rating:start', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      if (!roomId) return
+
+      const room = rooms.get(roomId)
+      if (!room) {
+        socket.emit('room:error', { event: 'rating:start', message: 'room not found' })
+        return
+      }
+      if (room.host !== socket.id) {
+        socket.emit('room:error', {
+          event: 'rating:start',
+          message: 'only host can start a rating round',
+        })
+        return
+      }
+      if (room.members.size < 2) {
+        socket.emit('room:error', {
+          event: 'rating:start',
+          message: 'need at least 2 players',
+        })
+        return
+      }
+
+      room.peerRating = { ballots: new Map(), startedBy: socket.id }
+      room.vote = null
+
+      const identity = socket.data?.identity as { identityId?: string } | undefined
+      for (const member of room.members.values()) {
+        io.to(member.id).emit(
+          'rating:state',
+          ratingStatePayload(room, member.identityId, nextSeq(room)),
+        )
+      }
+
+      console.log(`[rating:start] ${socket.id} -> ${roomId}`)
+    } catch (err) {
+      console.error(`[rating:start] error from ${socket.id}:`, err)
+      socket.emit('room:error', { event: 'rating:start', message: 'internal error' })
+    }
+  })
+
+  // ----- rating:submit -----------------------------------------------------
+  socket.on('rating:submit', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as {
+        roomId?: string
+        votes?: Record<string, string>
+      }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      if (!roomId) return
+
+      const room = rooms.get(roomId)
+      if (!room?.peerRating) return
+      if (!room.members.has(socket.id)) return
+
+      const voter = room.members.get(socket.id)!
+      const voterId = voter.identityId
+      const votesRaw = data.votes
+      if (!votesRaw || typeof votesRaw !== 'object') return
+
+      const ballot = new Map<string, string>()
+      const memberIds = new Set(
+        Array.from(room.members.values()).map((m) => m.identityId),
+      )
+
+      for (const [targetId, tier] of Object.entries(votesRaw)) {
+        if (targetId === voterId) continue
+        if (!memberIds.has(targetId)) continue
+        if (typeof tier !== 'string' || !isPeerTierLetter(tier)) continue
+        ballot.set(targetId, tier)
+      }
+
+      const expectedTargets = room.members.size - 1
+      if (ballot.size < expectedTargets) return
+
+      room.peerRating.ballots.set(voterId, ballot)
+
+      for (const member of room.members.values()) {
+        io.to(member.id).emit(
+          'rating:state',
+          ratingStatePayload(room, member.identityId, nextSeq(room)),
+        )
+      }
+
+      console.log(`[rating:submit] ${socket.id} in ${roomId}`)
+    } catch (err) {
+      console.error(`[rating:submit] error from ${socket.id}:`, err)
+    }
+  })
+
+  // ----- rating:end --------------------------------------------------------
+  socket.on('rating:end', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      if (!roomId) return
+
+      const room = rooms.get(roomId)
+      if (!room?.peerRating) return
+      if (room.host !== socket.id) {
+        socket.emit('room:error', {
+          event: 'rating:end',
+          message: 'only host can end a rating round',
+        })
+        return
+      }
+
+      const results = computePeerRatingResults(room)
+      room.peerRating = null
+
+      io.to(roomId).emit('rating:result', { results, seq: nextSeq(room) })
+      io.to(roomId).emit('rating:state', {
+        active: false,
+        submittedCount: 0,
+        totalPeers: room.members.size,
+        hasSubmitted: false,
+        seq: room.seq,
+      })
+
+      console.log(`[rating:end] ${socket.id} -> ${roomId}`)
+    } catch (err) {
+      console.error(`[rating:end] error from ${socket.id}:`, err)
+      socket.emit('room:error', { event: 'rating:end', message: 'internal error' })
+    }
+  })
+
+  // ----- rating:cancel -----------------------------------------------------
+  socket.on('rating:cancel', (payload: unknown) => {
+    try {
+      const data = (payload ?? {}) as { roomId?: string }
+      const roomId = typeof data.roomId === 'string' ? data.roomId.trim() : ''
+      if (!roomId) return
+
+      const room = rooms.get(roomId)
+      if (!room?.peerRating) return
+      if (room.host !== socket.id) {
+        socket.emit('room:error', {
+          event: 'rating:cancel',
+          message: 'only host can cancel a rating round',
+        })
+        return
+      }
+
+      room.peerRating = null
+      io.to(roomId).emit('rating:state', {
+        active: false,
+        submittedCount: 0,
+        totalPeers: room.members.size,
+        hasSubmitted: false,
+        seq: nextSeq(room),
+      })
+
+      console.log(`[rating:cancel] ${socket.id} -> ${roomId}`)
+    } catch (err) {
+      console.error(`[rating:cancel] error from ${socket.id}:`, err)
+    }
+  })
+
   // ----- disconnect ------------------------------------------------------
   // Remove the socket from every room it was in. For each affected room:
   //   - re-broadcast presence (with the possibly-new host),
@@ -962,6 +1261,16 @@ io.on('connection', (socket: Socket) => {
             if (room.vote && room.vote.votes.has(socket.id)) {
               room.vote.votes.delete(socket.id)
               io.to(roomId).emit('vote:state', voteStatePayload(room, nextSeq(room)))
+            }
+
+            if (room.peerRating && user) {
+              room.peerRating.ballots.delete(user.identityId)
+              for (const member of room.members.values()) {
+                io.to(member.id).emit(
+                  'rating:state',
+                  ratingStatePayload(room, member.identityId, nextSeq(room)),
+                )
+              }
             }
           }
         }

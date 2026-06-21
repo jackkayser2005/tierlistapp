@@ -21,7 +21,11 @@ export type ActivityAction =
   | "vote_started"
   | "voted"
   | "vote_ended"
-  | "vote_cancelled";
+  | "vote_cancelled"
+  | "rating_started"
+  | "rating_submitted"
+  | "rating_ended"
+  | "rating_cancelled";
 
 export interface ActivityEntry {
   id: string;
@@ -71,6 +75,22 @@ export const ACTIVITY_META: Record<
   },
   vote_cancelled: {
     label: (n) => `${n} cancelled the vote`,
+    tone: "text-muted-foreground",
+  },
+  rating_started: {
+    label: (n) => `${n} started a rating round`,
+    tone: "text-violet-300",
+  },
+  rating_submitted: {
+    label: (n) => `${n} submitted ratings`,
+    tone: "text-violet-300/80",
+  },
+  rating_ended: {
+    label: (n) => `${n} closed the rating round`,
+    tone: "text-emerald-300",
+  },
+  rating_cancelled: {
+    label: (n) => `${n} cancelled the rating round`,
     tone: "text-muted-foreground",
   },
 };

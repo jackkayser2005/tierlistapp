@@ -1,5 +1,8 @@
 // Core domain types and default data for RankForge.
 
+import type { PeerTierLetter } from "./peer-rating";
+import { hiddenAverageToTier, isPeerTierLetter } from "./peer-rating";
+
 export type ItemType = "text" | "image";
 
 export interface TierItem {
@@ -17,20 +20,22 @@ export interface Tier {
   name: string;
   /** Hex color string, e.g. "#ef4444". */
   color: string;
-  /** Points awarded for items placed in this tier (for leaderboard). */
+  /** Legacy numeric weight — not shown in UI; kept for board import compatibility. */
   points: number;
 }
 
 /** Special container id used for the unranked pool. */
 export const UNRANKED_ID = "__unranked__";
 
-/** Cumulative score banked for a player across finished rounds. Stores name +
- * color so banked players still render even after they disconnect. */
+/** Cumulative peer-rating result for a player across finished rounds. */
 export interface BankedScore {
-  score: number;
-  itemCount: number;
   name: string;
   color: string;
+  /** Display tier on the leaderboard — never expose numeric points. */
+  tier: PeerTierLetter;
+  /** Internal running average of hidden vote weights — never shown in UI. */
+  hiddenAverage: number;
+  rounds: number;
 }
 
 export interface RankForgeBoard {
@@ -42,7 +47,7 @@ export interface RankForgeBoard {
   tierItems: Record<string, string[]>;
   /** ordered item ids in the unranked pool. */
   unranked: string[];
-  /** identityId -> cumulative banked score across finished rounds. */
+  /** identityId -> cumulative peer-rating tier across finished rounds. */
   bankedScores: Record<string, BankedScore>;
 }
 
@@ -294,12 +299,26 @@ export function normalizeBoard(input: unknown): RankForgeBoard {
     for (const [id, raw] of Object.entries(bankedSrc as Record<string, unknown>)) {
       if (!raw || typeof raw !== "object") continue;
       const b = raw as Record<string, unknown>;
-      const score = typeof b.score === "number" && isFinite(b.score) ? b.score : 0;
-      const itemCount =
-        typeof b.itemCount === "number" && isFinite(b.itemCount) ? b.itemCount : 0;
       const name = typeof b.name === "string" ? b.name : "Player";
       const color = typeof b.color === "string" ? b.color : "#64748b";
-      bankedScores[id] = { score, itemCount, name, color };
+      const legacyScore =
+        typeof b.score === "number" && isFinite(b.score) ? b.score : null;
+      const hiddenAverage =
+        typeof b.hiddenAverage === "number" && isFinite(b.hiddenAverage)
+          ? b.hiddenAverage
+          : legacyScore !== null
+            ? Math.min(4.35, Math.max(0, legacyScore / 5))
+            : 0;
+      const rounds =
+        typeof b.rounds === "number" && isFinite(b.rounds) && b.rounds > 0
+          ? b.rounds
+          : 1;
+      const tierRaw = typeof b.tier === "string" ? b.tier : null;
+      const tier: PeerTierLetter =
+        tierRaw && isPeerTierLetter(tierRaw)
+          ? tierRaw
+          : hiddenAverageToTier(hiddenAverage);
+      bankedScores[id] = { name, color, tier, hiddenAverage, rounds };
     }
   }
 

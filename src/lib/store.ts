@@ -13,12 +13,14 @@ import {
   type Tier,
   type TierItem,
 } from "./tierlist";
+import type { PeerTierLetter } from "./peer-rating";
+import { mergeRoundIntoBanked } from "./scoring";
 
-/** A player's contribution in the current round, banked when the round ends. */
+/** One player's result after a peer-rating round is banked. */
 export interface RoundContribution {
   id: string;
-  score: number;
-  itemCount: number;
+  tier: PeerTierLetter;
+  hiddenAverage: number;
   name: string;
   color: string;
 }
@@ -54,8 +56,7 @@ interface RankForgeState extends RankForgeBoard {
   loadBoard: (board: RankForgeBoard) => void;
 
   // ---- round / scoring actions ----
-  /** Bank the current round's contributions into cumulative totals, then clear
-   * all item assignments so the next round starts from zero round-points. */
+  /** Bank peer-rating round results into cumulative tier standings. */
   bankRound: (contributions: RoundContribution[]) => void;
   /** Wipe all banked totals (host only). */
   resetScores: () => void;
@@ -289,34 +290,9 @@ export const useRankForge = create<RankForgeState>()(
         })),
 
       bankRound: (contributions) =>
-        set((state) => {
-          const bankedScores: Record<string, BankedScore> = {};
-          for (const [id, b] of Object.entries(state.bankedScores)) {
-            bankedScores[id] = { ...b };
-          }
-          for (const c of contributions) {
-            if (c.score === 0 && c.itemCount === 0) continue;
-            const prev = bankedScores[c.id];
-            bankedScores[c.id] = {
-              score: (prev?.score ?? 0) + c.score,
-              itemCount: (prev?.itemCount ?? 0) + c.itemCount,
-              name: c.name,
-              color: c.color,
-            };
-          }
-          // Clear assignments so the next round's live points start at zero.
-          const items: Record<string, TierItem> = {};
-          for (const [id, item] of Object.entries(state.items)) {
-            if (item.assignedUserId) {
-              const next = { ...item };
-              delete next.assignedUserId;
-              items[id] = next;
-            } else {
-              items[id] = item;
-            }
-          }
-          return { items, bankedScores };
-        }),
+        set((state) => ({
+          bankedScores: mergeRoundIntoBanked(state.bankedScores, contributions),
+        })),
 
       resetScores: () => set(() => ({ bankedScores: {} })),
 

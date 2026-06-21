@@ -365,6 +365,7 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       if (currentRoom) {
         sock.emit("room:join", { roomId: currentRoom });
         sock.emit("vote:sync-request", { roomId: currentRoom });
+        sock.emit("rating:sync-request", { roomId: currentRoom });
       }
     });
 
@@ -466,6 +467,7 @@ export function MultiplayerProvider({ children }: { children: React.ReactNode })
       const board = asHost ? snapshotBoard(useRankForge.getState()) : undefined;
       sock.emit("room:join", { roomId, board });
       sock.emit("vote:sync-request", { roomId });
+      sock.emit("rating:sync-request", { roomId });
     },
     [connect, handleState, applyRemoteBoard]
   );

@@ -1,105 +1,92 @@
 "use client";
 
-import type { RankForgeBoard, TierItem } from "./tierlist";
-import { UNRANKED_ID } from "./tierlist";
+import type { BankedScore } from "./tierlist";
 import type { RoomUser } from "./presence";
 import { memberKey } from "./presence";
+import {
+  compareTiers,
+  hiddenAverageToTier,
+  type PeerTierLetter,
+} from "./peer-rating";
 
-export interface ScoredUser {
+export interface RankedPlayer {
   userId: string;
   user: RoomUser | null;
-  score: number;
-  itemCount: number;
-  /** Photo from this user's highest-point assigned image item. */
-  avatarUrl?: string;
-  avatarLabel: string;
-  avatarColor: string;
+  tier: PeerTierLetter;
+  name: string;
+  color: string;
+  rounds: number;
 }
 
-function resolveMember(
-  assignedId: string,
-  members: RoomUser[]
-): RoomUser | null {
+function resolveMember(id: string, members: RoomUser[]): RoomUser | null {
   for (const m of members) {
-    if (memberKey(m) === assignedId || m.id === assignedId) return m;
+    if (memberKey(m) === id || m.id === id) return m;
   }
   return null;
 }
 
-/**
- * Compute leaderboard scores: for each user who has at least one assigned
- * item, sum the points of the tiers their items sit in. Unranked items
- * contribute 0 points. Returns users sorted by score descending.
- */
-export function computeLeaderboard(
-  board: RankForgeBoard,
+/** Build a sorted leaderboard from banked peer-rating results (tiers only, no points). */
+export function buildPlayerLeaderboard(
+  bankedScores: Record<string, BankedScore>,
   members: RoomUser[]
-): ScoredUser[] {
-  const tierPoints = new Map<string, number>();
-  for (const t of board.tiers) tierPoints.set(t.id, t.points ?? 0);
+): RankedPlayer[] {
+  const rows: RankedPlayer[] = [];
 
-  const itemTier = new Map<string, string>();
-  for (const t of board.tiers) {
-    for (const itemId of board.tierItems[t.id] ?? []) {
-      itemTier.set(itemId, t.id);
-    }
-  }
-  for (const itemId of board.unranked) {
-    itemTier.set(itemId, UNRANKED_ID);
-  }
-
-  const scores = new Map<
-    string,
-    {
-      score: number;
-      itemCount: number;
-      bestItem: TierItem | null;
-      bestPoints: number;
-    }
-  >();
-
-  for (const item of Object.values(board.items)) {
-    if (!item.assignedUserId) continue;
-    const tierId = itemTier.get(item.id) ?? UNRANKED_ID;
-    const pts = tierId === UNRANKED_ID ? 0 : (tierPoints.get(tierId) ?? 0);
-
-    // Normalize legacy socket-id assignments to stable identityId when possible.
-    const member = resolveMember(item.assignedUserId, members);
-    const stableId = member ? memberKey(member) : item.assignedUserId;
-
-    const existing = scores.get(stableId);
-    if (existing) {
-      existing.score += pts;
-      existing.itemCount += 1;
-      if (item.imageUrl && pts >= existing.bestPoints) {
-        existing.bestItem = item;
-        existing.bestPoints = pts;
-      }
-    } else {
-      scores.set(stableId, {
-        score: pts,
-        itemCount: 1,
-        bestItem: item.imageUrl ? item : null,
-        bestPoints: item.imageUrl ? pts : -1,
-      });
-    }
-  }
-
-  const result: ScoredUser[] = [];
-  for (const [userId, data] of scores) {
+  for (const [userId, b] of Object.entries(bankedScores)) {
     const member = resolveMember(userId, members);
-    const avatarItem = data.bestItem;
-    result.push({
+    rows.push({
       userId,
       user: member,
-      score: data.score,
-      itemCount: data.itemCount,
-      avatarUrl: avatarItem?.imageUrl,
-      avatarLabel: member?.name ?? "?",
-      avatarColor: member?.color ?? "#64748b",
+      tier: b.tier,
+      name: member?.name ?? b.name,
+      color: member?.color ?? b.color,
+      rounds: b.rounds ?? 1,
     });
   }
 
-  result.sort((a, b) => b.score - a.score || b.itemCount - a.itemCount);
-  return result;
+  rows.sort(
+    (a, b) => compareTiers(a.tier, b.tier) || a.name.localeCompare(b.name)
+  );
+  return rows;
+}
+
+/** Merge a finished round into cumulative banked scores (running hidden average). */
+export function mergeRoundIntoBanked(
+  existing: Record<string, BankedScore>,
+  roundResults: {
+    id: string;
+    tier: PeerTierLetter;
+    hiddenAverage: number;
+    name: string;
+    color: string;
+  }[]
+): Record<string, BankedScore> {
+  const next: Record<string, BankedScore> = {};
+  for (const [id, b] of Object.entries(existing)) {
+    next[id] = { ...b };
+  }
+  for (const r of roundResults) {
+    const prev = next[r.id];
+    if (prev) {
+      const rounds = (prev.rounds ?? 1) + 1;
+      const hiddenAverage =
+        ((prev.hiddenAverage ?? 0) * (prev.rounds ?? 1) + r.hiddenAverage) / rounds;
+      next[r.id] = {
+        name: r.name,
+        color: r.color,
+        tier: hiddenAverageToTier(hiddenAverage),
+        hiddenAverage,
+        rounds,
+      };
+    } else {
+      next[r.id] = {
+        name: r.name,
+        color: r.color,
+        tier: r.tier,
+        hiddenAverage: r.hiddenAverage,
+        rounds: 1,
+      };
+    }
+  }
+  return next;
 }

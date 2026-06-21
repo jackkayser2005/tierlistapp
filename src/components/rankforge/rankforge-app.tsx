@@ -24,6 +24,7 @@ import { UNRANKED_ID } from "@/lib/tierlist";
 import { usePngExport } from "@/hooks/use-png-export";
 import { MultiplayerProvider, useMultiplayer } from "@/hooks/use-multiplayer";
 import { VotingProvider } from "@/hooks/use-voting";
+import { PeerRatingProvider } from "@/hooks/use-peer-rating";
 import { Header } from "./header";
 import { TierBoard } from "./tier-board";
 import { UnrankedPool } from "./unranked-pool";
@@ -34,6 +35,7 @@ import { ActivityFeed } from "./activity-feed";
 import { DragOverlayCard } from "./item-card";
 import { VotingModeProvider } from "./voting-context";
 import { VotingOverlay } from "./voting-overlay";
+import { PeerRatingOverlay } from "./peer-rating-overlay";
 import { Leaderboard } from "./leaderboard";
 
 /**
@@ -133,9 +135,11 @@ export function RankForgeApp() {
 
   return (
     <MultiplayerProvider>
-      <VotingProvider>
-        <RankForgeInner />
-      </VotingProvider>
+      <PeerRatingProvider>
+        <VotingProvider>
+          <RankForgeInner />
+        </VotingProvider>
+      </PeerRatingProvider>
     </MultiplayerProvider>
   );
 }
@@ -293,6 +297,7 @@ function RankForgeInner() {
           </DndContext>
 
           <VotingOverlay />
+          <PeerRatingOverlay />
 
           <footer className="mt-auto border-t border-white/[0.06] bg-background/40 backdrop-blur">
             <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-5 text-xs text-muted-foreground sm:flex-row sm:px-6">
