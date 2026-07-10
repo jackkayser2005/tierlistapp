@@ -1,7 +1,5 @@
-"use client";
-
-import { RankForgeApp } from "@/components/rankforge/rankforge-app";
+import { RankedApp } from "@/components/ranked-app";
 
 export default function Home() {
-  return <RankForgeApp />;
+  return <RankedApp />;
 }
